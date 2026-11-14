@@ -1,0 +1,456 @@
+const { chromium } = require('playwright');
+const path = require('node:path');
+const fs = require('node:fs/promises');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+
+const directory = 'https://ui.awin.com/awin/affiliate/3150312/merchant-directory/index/tab/active/page/1';
+const site = 'https://davimarz.github.io/scaladeiturchi/';
+const message = 'Salve, gestisco scaladeiturchi, una web app italiana con un catalogo di offerte. Vorrei promuovere i vostri prodotti con link affiliati nelle schede del catalogo. Il sito è ' + site + ' Grazie.';
+
+const sectors = ['Retail & Shopping', 'Finance & Insurance', 'Telco & Services', 'Travel'];
+const readline = require('node:readline/promises');
+async function choose(terminal, prompt, options) {
+  options.forEach((name, index) => console.log((index + 1) + '. ' + name));
+  for (;;) {
+    const answer = (await terminal.question(prompt)).trim();
+    if (answer === '0') return [];
+    const values = [answer];
+    if (values.every(value => /^[1-9]\d*$/.test(value) && options[Number(value) - 1])) {
+      return [...new Set(values.map(value => options[Number(value) - 1]))];
+    }
+    console.log('Inserisci i numeri mostrati nel menu.');
+  }
+}
+
+const joinLabel = /^\s*\+?\s*Iscriviti\s*$/i;
+
+function joinByRole(scope) {
+  return scope.getByRole('button', { name: joinLabel })
+    .or(scope.getByRole('link', { name: joinLabel }));
+}
+
+async function joinControl(row) {
+  const byRole = joinByRole(row).filter({ visible: true });
+  if (await byRole.count() === 1) return byRole;
+  const label = row.getByText(joinLabel).filter({ visible: true });
+  if (await label.count() !== 1) return null;
+
+  const action = label.locator('xpath=ancestor-or-self::*[self::button or self::a or @role="button" or @role="link" or @tabindex][1]')
+    .and(row.locator('*')).filter({ visible: true });
+  return await action.count() === 1 ? action : label;
+}
+
+function unjoinedView(page) {
+  const title = /^Non iscritt[oi]\s*\(\s*[\d.,\s]+\)$/i;
+  const join = joinByRole(page).or(page.getByText(joinLabel));
+  const promote = page.getByText('Promuovi', { exact: true });
+  const listing = page.getByRole('table')
+    .filter({ has: page.getByRole('columnheader', { name: /feed prodotto/i }) })
+    .filter({ has: page.getByRole('row').filter({ has: join }) })
+    .filter({ hasNot: promote });
+
+  return page.getByText(title).or(listing).filter({ visible: true }).first();
+}
+
+async function hasProductFeed(row) {
+  return row.evaluate(element => {
+    const table = element.closest('table, [role="table"], [role="grid"]');
+    if (!table) return false;
+    const label = value => (value ?? '').replace(/\s+/g, ' ').trim();
+    const headers = [...table.querySelectorAll('thead tr:last-child th, [role="columnheader"]')];
+    const column = headers.findIndex(header => /^(feed prodotto|product feed)$/i.test(label(header.innerText)));
+    const cells = [...element.children].filter(cell => cell.matches('td, [role="cell"], [role="gridcell"]'));
+    return column >= 0 && /^(s[ìi]|yes)$/i.test(label(cells[column]?.innerText));
+  });
+}
+
+async function selectWebsite(form) {
+  for (const select of await form.locator('select:visible').all()) {
+    const options = await select.locator('option').evaluateAll(items => items.map(item => ({ value: item.value, text: item.textContent })));
+    const option = options.find(item => item.text.trim().replace(/\/$/, '') === site.replace(/\/$/, ''));
+    if (option) {
+      await select.selectOption({ value: option.value });
+      return true;
+    }
+  }
+  if (await form.getByText(site, { exact: true }).first().isVisible()) return true;
+  const menu = form.getByRole('combobox').filter({ visible: true });
+  if (await menu.count() !== 1) return false;
+  await menu.click({ timeout: 4000 });
+  const option = form.getByRole('option', { name: site, exact: true }).filter({ visible: true });
+  await option.waitFor({ timeout: 4000 });
+  await option.click({ timeout: 4000 });
+  return true;
+}
+
+const submissionReceipt = /(?:richiest[ae]|candidatur[ae]|domand[ae])\b(?:(?!\b(?:non|mai|errore|impossibile)\b)[^.!?]){0,100}\binviat[ae]\b|\binvio (?:avvenuto|completato) con successo\b/i;
+
+async function acknowledgeSubmission(page) {
+  const receipt = page.getByText(submissionReceipt).filter({ visible: true }).first();
+  try {
+    await receipt.waitFor({ timeout: 20000 });
+  } catch {
+    return false;
+  }
+
+  const popup = receipt.locator('xpath=ancestor::*[.//*[translate(normalize-space(.), "ok", "OK")="OK"]][1]');
+  const ok = popup.getByText(/^OK$/i).filter({ visible: true });
+  await ok.click({ timeout: 7000 });
+  await receipt.waitFor({ state: 'hidden', timeout: 7000 });
+  return true;
+}
+
+async function readWindowsCredential() {
+  if (process.platform !== 'win32' || !process.env.LOCALAPPDATA) return null;
+  const credentialPath = path.join(process.env.LOCALAPPDATA, 'AwinPlaywright', 'login.xml');
+  try {
+    await fs.access(credentialPath);
+  } catch {
+    return null;
+  }
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    "$file = Join-Path $env:LOCALAPPDATA 'AwinPlaywright\\login.xml'",
+    "$credential = Import-Clixml -LiteralPath $file",
+    "if ($credential -isnot [System.Management.Automation.PSCredential]) { throw 'Credenziale non valida' }",
+    "$json = @{ email = $credential.UserName; password = $credential.GetNetworkCredential().Password } | ConvertTo-Json -Compress",
+    "[Console]::Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)))"
+  ].join('; ');
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const { stdout } = await promisify(execFile)(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], {
+    windowsHide: true,
+    timeout: 10000,
+    maxBuffer: 16384
+  });
+  return JSON.parse(Buffer.from(stdout.trim(), 'base64').toString('utf8'));
+}
+
+function isAwinLoginUrl(value) {
+  const url = new URL(value);
+  if (url.origin === 'https://id.awin.com') {
+    return /^\/u\/login(?:\/|$)/i.test(url.pathname);
+  }
+  return url.origin === 'https://ui.awin.com' &&
+    /^\/(?:login(?:\/|$)|idp\/[^/]+\/awin\/login(?:\/|$))/i.test(url.pathname);
+}
+
+async function validateLoginAction(button, withPassword) {
+  return button.evaluate((element, protectedPassword) => {
+    const form = element.form ?? element.closest('form');
+    const action = new URL(element.getAttribute('formaction') || form?.getAttribute('action') ||
+      location.href, location.href);
+    const allowedOrigins = ['https://ui.awin.com', 'https://id.awin.com'];
+    if (!allowedOrigins.includes(location.origin) || action.origin !== location.origin) return false;
+    if (!protectedPassword || !form || element.type === 'button') return true;
+    const method = element.getAttribute('formmethod') || form.getAttribute('method');
+    return method?.toLowerCase() === 'post';
+  }, withPassword);
+}
+
+async function submitSavedLogin(page) {
+  if (!isAwinLoginUrl(page.url())) return 'Pagina di accesso Awin non riconosciuta.';
+  const credential = await readWindowsCredential();
+  if (!credential?.email || !credential?.password) return 'Credenziale Windows non configurata.';
+
+  const password = page.locator('input[type="password"]').filter({ visible: true });
+  const email = page.locator('input[type="email"], input[autocomplete="username"], input[name="email"], input[name="username"], input[name="identifier"]').filter({ visible: true });
+  const continueButton = page.getByRole('button', { name: /^(continua|continue|avanti|next)$/i }).filter({ visible: true });
+  const loginButtons = page.getByRole('button', { name: /^(accedi|login|log in|sign in|entra)$/i }).filter({ visible: true });
+  await password.or(email).first().waitFor({ timeout: 8000 });
+
+  if (await password.count() === 0) {
+    await continueButton.first().waitFor({ timeout: 5000 });
+    if (await email.count() !== 1 || await continueButton.count() !== 1 ||
+        !isAwinLoginUrl(page.url()) || !await validateLoginAction(continueButton, false)) {
+      return 'Schermata email o pulsante Continua non riconosciuto.';
+    }
+    await email.fill(credential.email);
+    await continueButton.click();
+    console.log('Awin | email inserita, premuto Continua.');
+    try {
+      await password.first().waitFor({ timeout: 10000 });
+    } catch {
+      return 'Awin non ha mostrato il campo password dopo Continua.';
+    }
+  } else if (await email.count() === 1 && isAwinLoginUrl(page.url())) {
+    await email.fill(credential.email);
+  }
+
+  await loginButtons.or(continueButton).first().waitFor({ timeout: 5000 });
+  const loginButton = await loginButtons.count() ? loginButtons : continueButton;
+  if (await password.count() !== 1 || await loginButton.count() !== 1 ||
+      !isAwinLoginUrl(page.url()) || !await validateLoginAction(loginButton, true)) {
+    return 'Schermata password o pulsante Accedi non riconosciuto.';
+  }
+  await password.fill(credential.password);
+  if (!isAwinLoginUrl(page.url()) || !await validateLoginAction(loginButton, true)) {
+    return 'Destinazione del login Awin non riconosciuta.';
+  }
+  await loginButton.click();
+  return null;
+}
+
+async function runPass(confirmed, sector) {
+  console.log('scaladeiturchi | Italia | Feed prodotto: Sì | ' + sector);
+  let browser;
+  try {
+    browser = await chromium.launchPersistentContext(path.join(__dirname, '.awin-profile'), { headless: false });
+    const page = browser.pages()[0] ?? await browser.newPage();
+    page.setDefaultTimeout(7000);
+    await page.goto(directory, { waitUntil: 'domcontentloaded' });
+    const unjoinedLabel = /^Non iscritt[oi]$/i;
+    const tabText = page.getByText(unjoinedLabel).filter({ visible: true });
+    const tabAction = tabText.locator('xpath=ancestor-or-self::*[self::a or self::button or @role="tab" or @role="button"][1]')
+      .filter({ visible: true }).first();
+    const nonIscritto = tabText.first();
+    if (!isAwinLoginUrl(page.url())) {
+      await Promise.any([
+        nonIscritto.waitFor({ timeout: 8000 }),
+        page.waitForURL(url => isAwinLoginUrl(url.href), { timeout: 8000 })
+      ]).catch(() => {});
+    }
+    if (isAwinLoginUrl(page.url())) {
+      const issue = await submitSavedLogin(page).catch(() => 'Accesso automatico non completato.');
+      if (issue) throw new Error(issue);
+    }
+    await nonIscritto.waitFor({ timeout: 15000 }).catch(() => {
+      throw new Error('La pagina advertiser non è disponibile dopo l’accesso. Verifica eventuali richieste di sicurezza in Awin.');
+    });
+    const unjoined = unjoinedView(page);
+    if (!await unjoined.isVisible()) {
+      const target = await nonIscritto.evaluate(element => {
+        const action = element.closest('a, button, [role="tab"], [role="button"]') ?? element;
+        const href = action.getAttribute('href');
+        return { tag: action.tagName, role: action.getAttribute('role'), href: href && !href.startsWith('#') ? action.href : null };
+      });
+      const waitForListing = () => unjoined.waitFor({ timeout: 6000 }).then(() => true, () => false);
+      await nonIscritto.click();
+      console.log('Awin | clic sull’etichetta «Non iscritto».');
+      let opened = await waitForListing();
+
+      if (!opened && target.href) {
+        const link = new URL(target.href);
+        const current = new URL(page.url());
+        const directoryPath = new URL(directory).pathname.split('/tab/')[0];
+        if (link.origin === new URL(directory).origin &&
+            link.pathname.startsWith(directoryPath + '/') &&
+            (link.pathname !== current.pathname || link.search !== current.search)) {
+          console.log('Awin | apro il collegamento di «Non iscritto» presente nella pagina.');
+          await page.goto(link.href, { waitUntil: 'domcontentloaded' });
+          opened = await waitForListing();
+        }
+      }
+
+      if (!opened && await tabAction.isVisible()) {
+        console.log('Awin | attivo il controllo «Non iscritto» con Invio nel browser.');
+        await tabAction.press('Enter');
+        opened = await waitForListing();
+      }
+
+      if (!opened) {
+        const personal = await page.getByText(/^Advertiser personali\b/i).filter({ visible: true }).first().isVisible();
+        const control = target.tag + (target.role ? '/' + target.role : '');
+        throw new Error('«Non iscritto» non confermata. Controllo Awin: ' + control +
+          (personal ? '. La pagina mostra ancora «Advertiser personali».' : '. La tabella attesa non è comparsa.'));
+      }
+    }
+    console.log('Awin | scheda Non iscritto verificata. Controllo i candidati e il feed prodotto per riga.');
+
+    const exactVisible = label => page.getByText(label, { exact: true }).filter({ visible: true });
+    const filterItem = label => label.locator('xpath=ancestor-or-self::li[contains(concat(" ", normalize-space(@class), " "), " checkbox ")][1]');
+    const selected = item => item.evaluate(node => node.classList.contains('selected'));
+    const branchItem = label => label.locator('xpath=ancestor-or-self::li[./ul or ./*[contains(concat(" ", normalize-space(@class), " "), " hitarea ")]][1]');
+    async function openBranch(label, child) {
+      if (await child.count() === 1 && await child.isVisible()) return;
+      const toggle = branchItem(label).locator('xpath=./*[contains(concat(" ", normalize-space(@class), " "), " hitarea ") or @aria-expanded="false"]')
+        .filter({ visible: true });
+      if (await toggle.count() === 1) {
+        await toggle.click();
+      } else {
+        const item = filterItem(label);
+        const wasSelected = await item.count() === 1 && await selected(item);
+        await label.click();
+        if (!wasSelected && await item.count() === 1 && await selected(item)) {
+          await label.click();
+          await item.and(page.locator(':not(.selected)')).waitFor();
+        }
+      }
+      try {
+        await child.waitFor({ timeout: 5000 });
+      } catch {
+        const details = await label.evaluate(element => {
+          const result = [];
+          for (let node = element, depth = 0; node && depth < 4; node = node.parentElement, depth++) {
+            const describe = entry => [entry.tagName, entry.className, entry.getAttribute('aria-expanded')];
+            result.push([describe(node), [...node.children].slice(0, 6).map(describe)]);
+          }
+          return result;
+        });
+        console.log('Awin | struttura ramo: ' + JSON.stringify(details));
+        throw new Error('Sottocategoria ancora nascosta nel ramo ' + await label.innerText());
+      }
+    }
+    const italyText = exactVisible('Italia').first();
+    const europeText = exactVisible('Europa').first();
+    if (!await italyText.isVisible()) {
+      if (!await europeText.isVisible()) {
+        await exactVisible('Regioni').first().click();
+        await europeText.waitFor();
+      }
+      await openBranch(europeText, italyText);
+    }
+    const europeGroup = europeText.locator('xpath=ancestor::*[.//*[normalize-space(.)="Italia"] and .//*[normalize-space(.)="Irlanda"]][1]');
+    const italyLabel = europeGroup.getByText('Italia', { exact: true }).filter({ visible: true });
+    const feedTitle = page.getByText(/^Feed prodotto$/i).filter({ visible: true })
+      .and(page.locator(':not(th):not(th *)'));
+    const feedGroup = feedTitle.locator('xpath=ancestor::*[.//*[normalize-space(.)="No"] and .//li[contains(concat(" ", normalize-space(@class), " "), " checkbox ")]][1]');
+    const feedYes = feedGroup.getByText(/^(sì|si)$/i).filter({ visible: true });
+    const feedNo = feedGroup.getByText('No', { exact: true }).filter({ visible: true });
+    const italyItem = filterItem(italyLabel);
+    const yesItem = filterItem(feedYes);
+    const noItem = filterItem(feedNo);
+    for (const [label, item, checked, name] of [
+      [italyLabel, italyItem, true, 'Italia'],
+      [feedNo, noItem, false, 'Feed prodotto: No'],
+      [feedYes, yesItem, true, 'Feed prodotto: Sì']
+    ]) {
+      if (await label.count() !== 1 || await item.count() !== 1) {
+        throw new Error('Filtro non identificabile: ' + name);
+      }
+      if (await selected(item) !== checked) await label.click();
+      await item.and(page.locator(checked ? '.selected' : ':not(.selected)')).waitFor();
+    }
+    const requiredFiltersActive = async () =>
+      await selected(italyItem) && await selected(yesItem) && !await selected(noItem);
+    console.log('Awin | Italia e Feed prodotto: Sì selezionati.');
+
+    const sectorLabel = page.getByText(sector, { exact: true }).filter({ visible: true });
+    await sectorLabel.waitFor();
+    const sectorItem = filterItem(sectorLabel);
+    if (await sectorItem.count() !== 1) throw new Error('Casella del settore non identificabile: ' + sector);
+    if (!await selected(sectorItem)) {
+      await sectorLabel.click();
+      await sectorItem.and(page.locator('.selected')).waitFor();
+    }
+    await unjoined.waitFor();
+    console.log('Awin | settore applicato: ' + sector);
+
+    const table = page.getByRole('table').filter({ has: page.getByRole('columnheader', { name: /feed prodotto/i }) }).filter({ visible: true });
+    const rows = table.locator('tbody tr:visible').filter({ has: joinByRole(page).or(page.getByText(joinLabel)) });
+    const overlay = page.locator('.blockUI.blockOverlay:visible');
+    const waitForResults = () => overlay.first().waitFor({ state: 'hidden', timeout: 30000 });
+    const seen = new Set();
+    let submitted = 0;
+    let skipped = 0;
+    const visitedPages = new Set();
+    while (true) {
+      await waitForResults();
+      if (!await requiredFiltersActive() || !await selected(sectorItem) || !await unjoined.isVisible()) {
+        throw new Error('La scheda o uno dei filtri richiesti non sono più attivi.');
+      }
+      const names = (await rows.locator('td:first-child').allTextContents()).map(name => name.trim()).filter(Boolean);
+      const name = names.find(candidate => !seen.has(candidate));
+      if (!name) {
+        const nextLabel = /^(?:pagina )?successiv[ao]$/i;
+        const next = page.getByRole('link', { name: nextLabel })
+          .or(page.getByRole('button', { name: nextLabel }))
+          .or(page.getByText(nextLabel)).filter({ visible: true });
+        const controls = await next.count();
+        if (controls > 1) throw new Error('Più controlli Successivo visibili. Paginazione da verificare.');
+        if (!controls || !await next.isEnabled() || await next.getAttribute('aria-disabled') === 'true') break;
+        const previous = await table.locator('tbody').allTextContents().then(JSON.stringify);
+        if (visitedPages.has(previous)) throw new Error('La paginazione Awin è tornata a una pagina già esaminata.');
+        visitedPages.add(previous);
+        await next.click();
+        await waitForResults();
+        const deadline = Date.now() + 7000;
+        while (Date.now() < deadline) {
+          const current = await table.locator('tbody').allTextContents().then(JSON.stringify);
+          if (current !== '[]' && current !== previous) break;
+          await new Promise(resolve => setTimeout(resolve, 150));
+        }
+        if (Date.now() >= deadline) {
+          throw new Error('Awin non ha mostrato una pagina diversa dopo Successivo. Scansione incompleta.');
+        }
+        continue;
+      }
+      seen.add(name);
+      if (confirmed.has(name)) {
+        throw new Error(name + ' | candidatura già confermata, ma Awin mostra ancora Iscriviti. Controlla In attesa.');
+      }
+      const row = rows.filter({ has: page.getByText(name, { exact: true }) });
+      if (await row.count() !== 1 || !await hasProductFeed(row)) {
+        console.log(name + ' | riga ambigua o feed prodotto non confermato');
+        skipped++;
+        continue;
+      }
+      const join = await joinControl(row);
+      if (!join) {
+        console.log(name + ' | controllo «+ Iscriviti» assente o ambiguo nella riga');
+        skipped++;
+        continue;
+      }
+      if (!await join.isEnabled()) {
+        console.log(name + ' | controllo «+ Iscriviti» disabilitato');
+        skipped++;
+        continue;
+      }
+      try {
+        await join.click({ timeout: 30000 });
+      } catch (error) {
+        if (error.name !== 'TimeoutError') throw error;
+        await waitForResults();
+        if (await row.count() === 0) {
+          console.log(name + ' | riga rimossa dopo l’aggiornamento della tabella.');
+          continue;
+        }
+        throw new Error(name + ' | il controllo Iscriviti è rimasto bloccato o non cliccabile.', { cause: error });
+      }
+      const title = page.getByText('Iscriviti al programma', { exact: true }).filter({ visible: true });
+      await title.waitFor();
+      const form = title.locator('xpath=ancestor::*[.//textarea and .//*[self::button or self::a or @role="button"][normalize-space(.)="Iscriviti"]][1]');
+      const field = form.locator('textarea:visible');
+      const terms = form.getByRole('checkbox').filter({ visible: true });
+      const submit = form.getByRole('button', { name: 'Iscriviti', exact: true })
+        .or(form.getByRole('link', { name: 'Iscriviti', exact: true })).filter({ visible: true });
+      await field.waitFor();
+      if (await terms.count() !== 1 || await submit.count() !== 1 ||
+          !await form.getByText(/accetti di rispettare le condizioni specifiche/i).first().isVisible()) {
+        throw new Error(name + ' | Condizioni o pulsante Iscriviti non identificati nel modulo.');
+      }
+      if (!await selectWebsite(form)) {
+        throw new Error(name + ' | Seleziona o registra prima scaladeiturchi come spazio promozionale in Awin.');
+      }
+      await field.fill(message);
+      await terms.check();
+      await submit.click();
+      if (!await acknowledgeSubmission(page)) {
+        throw new Error(name + ' | Invio tentato, ma il testo del popup non è stato riconosciuto. Controlla «In attesa» prima di riprovare.');
+      }
+      confirmed.add(name);
+      submitted++;
+      console.log(name + ' | richiesta inviata, ricevuta Awin verificata');
+    }
+    console.log('Invii confermati da Awin: ' + submitted + ' su ' + seen.size + ' advertiser esaminati.');
+    return { submitted, skipped };
+  } finally {
+    await browser?.close();
+  }
+}
+
+async function main() {
+  const terminal = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const [sector] = await choose(terminal, 'Settore (0 per uscire): ', sectors);
+    if (!sector) return;
+    await runPass(new Set(), sector);
+  } finally {
+    terminal.close();
+  }
+}
+
+main().catch(error => {
+  console.error('Preparazione interrotta: ' + error.message);
+  process.exitCode = 1;
+});

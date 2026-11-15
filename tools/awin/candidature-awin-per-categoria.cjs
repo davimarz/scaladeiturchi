@@ -1,15 +1,13 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const os = require('node:os');
 const { createInterface } = require('node:readline');
-const { spawn, execFile } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 
 const args = process.argv.slice(2);
 const publisher = args[0] && !args[0].startsWith('--') ? args.shift() : '3150312';
 const mode = args[0] || '--prova';
 const profile = process.env.AWIN_PROFILE_DIR || path.join(__dirname, '.awin-profile');
-const listini = path.join(__dirname, 'LISTINI');
 const ledgerPath = path.join(__dirname, '.candidature-scala.jsonl');
 const directory = 'https://ui.awin.com/awin/affiliate/' + publisher + '/merchant-directory/index/tab/active/page/1';
 const site = 'https://davimarz.github.io/scaladeiturchi/';
@@ -27,7 +25,7 @@ const categories = [
   'Vini, alcolici e tabacchi',
 ];
 const key = value => value.trim().replace(/\s+/g, ' ').toLowerCase();
-const canSubmit = mode === '--invia' || mode === '--tutto';
+const canSubmit = mode === '--invia';
 
 const joinLabel = /^\s*\+?\s*Iscriviti\s*$/i;
 
@@ -197,8 +195,8 @@ async function submitSavedLogin(page) {
   return null;
 }
 
-async function runPass(browser, category, confirmed, active, onMatch) {
-    console.log('Scala dei Turchi | Italia | Feed prodotto: Sì | ' + category + (active ? ' | Iscritti' : ' | Non iscritti'));
+async function runPass(browser, category, confirmed, onMatch) {
+    console.log('Scala dei Turchi | Italia | Feed prodotto: Sì | ' + category + ' | Non iscritti');
     const page = browser.pages()[0] ?? await browser.newPage();
     page.setDefaultTimeout(7000);
     await page.goto(directory, { waitUntil: 'domcontentloaded' });
@@ -220,11 +218,8 @@ async function runPass(browser, category, confirmed, active, onMatch) {
     await nonIscritto.waitFor({ timeout: 15000 }).catch(() => {
       throw new Error('La pagina advertiser non è disponibile dopo l’accesso. Verifica eventuali richieste di sicurezza in Awin.');
     });
-    const currentTab = active
-      ? page.getByText(/^Advertiser personali(?:\s*\(\s*[\d.,]+\s*\))?$/i).filter({ visible: true }).first()
-      : unjoinedView(page);
-    if (active) await currentTab.waitFor();
-    if (!active && !await currentTab.isVisible()) {
+    const currentTab = unjoinedView(page);
+    if (!await currentTab.isVisible()) {
       const target = await nonIscritto.evaluate(element => {
         const action = element.closest('a, button, [role="tab"], [role="button"]') ?? element;
         const href = action.getAttribute('href');
@@ -378,7 +373,7 @@ async function runPass(browser, category, confirmed, active, onMatch) {
       throw new Error('Tabella con colonna Feed prodotto non verificata.');
     }
     const allRows = table.locator('tbody tr:visible');
-    const rows = active ? allRows : allRows.filter({ has: joinByRole(page).or(page.getByText(joinLabel)) });
+    const rows = allRows.filter({ has: joinByRole(page).or(page.getByText(joinLabel)) });
     const overlay = page.locator('.blockUI.blockOverlay:visible');
     const waitForResults = () => overlay.first().waitFor({ state: 'hidden', timeout: 30000 });
     const seen = new Set();
@@ -425,7 +420,7 @@ async function runPass(browser, category, confirmed, active, onMatch) {
         continue;
       }
       onMatch(name, category);
-      if (active || !canSubmit) { console.log(name + ' | idoneo'); continue; }
+      if (!canSubmit) { console.log(name + ' | idoneo'); continue; }
       if (confirmed.has(key(name))) {
         console.log(name + ' | operazione già registrata; controlla In attesa in Awin.');
         continue;
@@ -483,61 +478,6 @@ async function runPass(browser, category, confirmed, active, onMatch) {
     return { submitted, skipped };
 }
 
-async function runDownloader(script, name, output) {
-  await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [script, publisher, name], {
-      stdio: 'inherit',
-      env: { ...process.env, AWIN_LISTINI_DIR: output },
-    });
-    child.once('error', reject);
-    child.once('exit', code => code === 0 ? resolve() : reject(new Error('Scaricatore terminato con codice ' + code)));
-  });
-  const files = (await fs.readdir(output, { withFileTypes: true })).filter(file =>
-    file.isFile() && /\.(?:(?:csv|tsv|jsonl|ndjson)(?:\.gz)?|gz)$/i.test(file.name));
-  if (!files.length) throw new Error('Nessun listino scaricato.');
-  return files;
-}
-
-async function downloadFeeds(matches, failures) {
-  if (!matches.size) return;
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'scala-awin-'));
-  const helper = path.join(__dirname, '.scarica-awin-' + process.pid + '.cjs');
-  try {
-    const response = await fetch('https://raw.githubusercontent.com/davimarz/archivioscarpe/a4bf3cc0ebecadc7450c6180d42a2d2af6407bc2/tools/awin/scarica-listini-awin.cjs', {
-      redirect: 'error', signal: AbortSignal.timeout(30000),
-    });
-    if (!response.ok) throw new Error('Scaricatore di Archivio Scarpe: HTTP ' + response.status);
-    const source = await response.text();
-    const profileOriginal = "const profile = path.join(__dirname, '.awin-profile');";
-    if (source.split(profileOriginal).length !== 2) throw new Error('Versione dello scaricatore non riconosciuta.');
-    await fs.writeFile(helper, source.replace(profileOriginal, 'const profile = ' + JSON.stringify(profile) + ';'), { flag: 'wx' });
-    for (const { name, folders } of matches.values()) {
-      const staging = await fs.mkdtemp(path.join(temp, 'feed-'));
-      try {
-        const files = await runDownloader(helper, name, staging);
-        for (const category of folders) {
-          const folder = path.join(listini, category);
-          for (const file of files) {
-            const dest = path.join(folder, file.name);
-            const incoming = dest + '.' + process.pid + '.part';
-            try {
-              await fs.copyFile(path.join(staging, file.name), incoming);
-              await fs.rename(incoming, dest);
-            } finally { await fs.rm(incoming, { force: true }); }
-          }
-        }
-        console.log(name + ' | listino salvato in ' + [...folders].join(', '));
-      } catch (error) {
-        failures.push({ name, stage: 'download', error: error.message });
-        console.error(name + ' | ' + error.message);
-      }
-    }
-  } finally {
-    await fs.rm(helper, { force: true });
-    await fs.rm(temp, { recursive: true, force: true });
-  }
-}
-
 function parseCategoryChoice(value) {
   const input = value.trim();
   if (!/^(?:0|[1-9]\d*)$/.test(input)) return null;
@@ -568,13 +508,11 @@ async function chooseCategories(value) {
 }
 
 async function main() {
-  if (!/^\d+$/.test(publisher) || args.length > 2 || !['--cartelle', '--prova', '--invia', '--scarica', '--tutto'].includes(mode)) {
-    throw new Error('Uso: node candidature-awin-per-categoria.cjs [ID_PUBLISHER] [--cartelle|--prova|--invia|--scarica|--tutto] [numero]');
+  if (!/^\d+$/.test(publisher) || args.length > 2 || !['--prova', '--invia'].includes(mode)) {
+    throw new Error('Uso: node candidature-awin-per-categoria.cjs [ID_PUBLISHER] [--prova|--invia] [numero]');
   }
   const chosen = await chooseCategories(args[1]);
   console.log('Sottocategorie selezionate: ' + (chosen.length === categories.length ? 'tutte (' + categories.length + ')' : chosen[0]));
-  for (const category of chosen) await fs.mkdir(path.join(listini, category), { recursive: true });
-  if (mode === '--cartelle') { console.log(chosen.length + ' cartelle pronte in ' + listini); return; }
   const { chromium } = require('playwright');
   const previous = await fs.readFile(ledgerPath, 'utf8').catch(error => {
     if (error.code === 'ENOENT') return '';
@@ -582,46 +520,33 @@ async function main() {
   });
   const confirmed = new Set(previous.split('\n').filter(Boolean).map(line => JSON.parse(line))
     .filter(entry => entry.publisher === publisher).map(entry => key(entry.name)));
-  const candidates = new Map(), active = new Map(), failures = [];
-  function record(map, name, category) {
-    const id = key(name);
-    if (!map.has(id)) map.set(id, { name, folders: new Set() });
-    map.get(id).folders.add(category);
-  }
-
+  const candidates = new Set(), failures = [];
   const browser = await chromium.launchPersistentContext(profile, { headless: false });
   try {
-    const phases = mode === '--scarica' ? [true] : mode === '--tutto' ? [false, true] : [false];
-    for (const isActive of phases) {
-      for (const category of chosen) {
-        try {
-          for (let pass = 0; ; pass++) {
-            const result = await runPass(browser, category, confirmed, isActive,
-              (name, folder) => record(isActive ? active : candidates, name, folder));
-
-            if (result.skipped) failures.push({ category, stage: isActive ? 'iscritti' : 'candidature', error: result.skipped + ' righe da verificare' });
-            if (isActive || !result.submitted) break;
-            if (pass === 7) throw new Error('Risultati ancora in movimento dopo otto passaggi. Ripeti il comando.');
-          }
-        } catch (error) {
-          failures.push({ category, stage: isActive ? 'iscritti' : 'candidature', error: error.message });
-          console.error(category + ' | ' + error.message);
+    for (const category of chosen) {
+      try {
+        for (let pass = 0; ; pass++) {
+          const result = await runPass(browser, category, confirmed, name => candidates.add(key(name)));
+          if (result.skipped) failures.push(category + ': ' + result.skipped + ' righe da verificare');
+          if (!result.submitted) break;
+          if (pass === 7) throw new Error('Risultati ancora in movimento dopo otto passaggi. Ripeti il comando.');
         }
+      } catch (error) {
+        const detail = category + ' | ' + error.message;
+        failures.push(detail);
+        console.error(detail);
       }
     }
   } finally { await browser.close(); }
-  if (mode === '--scarica' || mode === '--tutto') await downloadFeeds(active, failures);
   const ledger = await fs.readFile(ledgerPath, 'utf8').catch(error => {
     if (error.code === 'ENOENT') return previous;
     throw error;
   });
   const sent = ledger.slice(previous.length).split('\n').filter(Boolean).map(line => JSON.parse(line))
     .filter(entry => entry.publisher === publisher && entry.status === 'confermato').length;
-  const serialize = map => [...map.values()].map(item => ({ name: item.name, categorie: [...item.folders] }));
-  await fs.writeFile(path.join(listini, 'esito-awin.json'),
-    JSON.stringify({ mode, inviateConRicevuta: sent, candidati: serialize(candidates), attivi: serialize(active), daVerificare: failures }, null, 2) + '\n');
   console.log('Invii confermati: ' + sent + ' | candidati rilevati: ' + candidates.size +
-    ' | attivi rilevati: ' + active.size + ' | segnalazioni: ' + failures.length);
+    ' | segnalazioni: ' + failures.length);
+  for (const detail of failures) console.log('Da verificare: ' + detail);
   if (failures.length) process.exitCode = 2;
 }
 

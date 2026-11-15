@@ -1,10 +1,10 @@
 # Incolla tutto il blocco in PowerShell, anche se si apre in System32.
-# --tutto: candidature e listini. --scarica: solo listini. --prova: nessun invio.
+# --invia: candidature. Usa --prova per vedere i candidati senza inviare.
 & {
     $scriptAwin = 'C:\Users\admin\awin-playwright\scaladeiturchi\candidature-awin-per-categoria.cjs'
     if (-not (Test-Path -LiteralPath $scriptAwin -PathType Leaf)) {
         Write-Error "File non trovato: $scriptAwin. Salva lo script aggiornato con il nome indicato."
         return
     }
-    & node $scriptAwin --tutto
+    & node $scriptAwin --invia
 }

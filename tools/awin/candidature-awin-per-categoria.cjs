@@ -1,6 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const os = require('node:os');
+const { createInterface } = require('node:readline');
 const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 
@@ -537,12 +538,43 @@ async function downloadFeeds(matches, failures) {
   }
 }
 
-async function main() {
-  if (!/^\d+$/.test(publisher || '') || args.length > 2 || !['--cartelle', '--prova', '--invia', '--scarica', '--tutto'].includes(mode)) {
-    throw new Error('Uso: node candidature-awin-per-categoria.cjs ID_PUBLISHER [--cartelle|--prova|--invia|--scarica|--tutto]');
+function parseCategoryChoice(value) {
+  const input = value.trim();
+  if (!/^(?:0|[1-9]\d*)$/.test(input)) return null;
+  const number = Number(input);
+  return number === 0 ? categories : number <= categories.length ? [categories[number - 1]] : null;
+}
+
+async function chooseCategories(value) {
+  if (value !== undefined) {
+    const chosen = parseCategoryChoice(value);
+    if (!chosen) throw new Error('Scegli un numero da 0 a ' + categories.length + '.');
+    return chosen;
   }
-  for (const category of categories) await fs.mkdir(path.join(listini, category), { recursive: true });
-  if (mode === '--cartelle') { console.log(categories.length + ' cartelle pronte in ' + listini); return; }
+  console.log('\nRetail & Shopping\n0. Tutte le sottocategorie');
+  categories.forEach((category, index) => console.log((index + 1) + '. ' + category));
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  prompt.setPrompt('Inserisci il numero della sottocategoria: ');
+  try {
+    prompt.prompt();
+    for await (const line of prompt) {
+      const chosen = parseCategoryChoice(line);
+      if (chosen) return chosen;
+      console.log('Numero non valido. Scegli da 0 a ' + categories.length + '.');
+      prompt.prompt();
+    }
+    throw new Error('Nessuna sottocategoria selezionata.');
+  } finally { prompt.close(); }
+}
+
+async function main() {
+  if (!/^\d+$/.test(publisher || '') || args.length > 3 || !['--cartelle', '--prova', '--invia', '--scarica', '--tutto'].includes(mode)) {
+    throw new Error('Uso: node candidature-awin-per-categoria.cjs ID_PUBLISHER [--cartelle|--prova|--invia|--scarica|--tutto] [numero]');
+  }
+  const chosen = await chooseCategories(args[2]);
+  console.log('Sottocategorie selezionate: ' + (chosen.length === categories.length ? 'tutte (' + categories.length + ')' : chosen[0]));
+  for (const category of chosen) await fs.mkdir(path.join(listini, category), { recursive: true });
+  if (mode === '--cartelle') { console.log(chosen.length + ' cartelle pronte in ' + listini); return; }
   const { chromium } = require('playwright');
   const previous = await fs.readFile(ledgerPath, 'utf8').catch(error => {
     if (error.code === 'ENOENT') return '';
@@ -561,7 +593,7 @@ async function main() {
   try {
     const phases = mode === '--scarica' ? [true] : mode === '--tutto' ? [false, true] : [false];
     for (const isActive of phases) {
-      for (const category of categories) {
+      for (const category of chosen) {
         try {
           for (let pass = 0; ; pass++) {
             const result = await runPass(browser, category, confirmed, isActive,

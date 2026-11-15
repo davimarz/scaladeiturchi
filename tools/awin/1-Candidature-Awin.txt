@@ -1,4 +1,5 @@
 # PowerShell: esegui questo blocco dalla cartella in cui hai salvato il file .cjs.
 # Passa --prova per controllare i candidati senza inviare; --scarica per i soli listini.
+# Nel menu scegli il numero della sottocategoria, oppure 0 per tutte.
 $id = Read-Host 'Inserisci il Publisher ID Awin'
 node ".\candidature-awin-per-categoria.cjs" "$id" --tutto

@@ -58,6 +58,29 @@ function onlySelectedLeaf(target, root) {
     item !== target && !item.contains(target) && checked(item));
 }
 
+function verifyItalyRegion(target) {
+  // The Regioni heading can be a sibling of this tree, not inside it.
+  const label = item => [...item.children].filter(child => child.tagName !== 'UL')
+    .map(child => child.textContent.replace(/\s+/g, ' ').trim());
+  const continents = ['Africa', 'Asia', 'America del nord', 'Oceania', 'America del sud'];
+  if (!label(target).includes('Italia')) return 'Casella Italia non riconosciuta.';
+  for (let list = target.parentElement; list; list = list.parentElement) {
+    if (list.tagName !== 'UL') continue;
+    const branches = [...list.children].filter(item => item.matches('li.checkbox'));
+    const europe = branches.find(item => item.contains(target) && label(item).includes('Europa'));
+    if (!europe || !branches.some(item => label(item).some(value => continents.includes(value)))) continue;
+    const checked = item => item.classList.contains('selected') ||
+      [...item.querySelectorAll('input[type="checkbox"]:checked, [role="checkbox"][aria-checked="true"]')]
+        .some(control => control.closest('li.checkbox') === item);
+    if (!checked(target)) return 'Italia non selezionata.';
+    const others = [...list.querySelectorAll('li.checkbox')]
+      .filter(item => item !== target && !item.contains(target) && checked(item));
+    return others.length ? 'Altre regioni selezionate: ' + others.map(item =>
+      label(item).find(Boolean) || 'senza nome').join(', ') : null;
+  }
+  return 'Gruppo delle regioni non riconosciuto attorno a Italia.';
+}
+
 async function hasProductFeed(row) {
   return row.evaluate(element => {
     const table = element.closest('table, [role="table"], [role="grid"]');
@@ -307,7 +330,6 @@ async function runPass(browser, category, confirmed, onMatch) {
       if (await selected(item) !== checked) await label.click();
       await item.and(page.locator(checked ? '.selected' : ':not(.selected)')).waitFor();
     }
-    const regionRoot = italyItem.locator('xpath=ancestor::*[.//*[normalize-space(.)="Regioni"] and .//*[normalize-space(.)="Europa"]][1]');
     const onlyChoice = async (item, group) => {
       if (await item.count() !== 1 || await group.count() !== 1) return false;
       const root = await group.elementHandle();
@@ -351,7 +373,9 @@ async function runPass(browser, category, confirmed, onMatch) {
       .filter({ has: joinByRole(page).or(page.getByText(joinLabel)) });
     const verifyScope = async () => {
       if (!await directoryReady()) throw new Error('Elenco advertiser non verificabile.');
-      if (!await onlyChoice(italyItem, regionRoot)) throw new Error('Regione Italia non verificabile come unica regione.');
+      if (await italyItem.count() !== 1) throw new Error('Casella Italia non identificabile.');
+      const regionIssue = await italyItem.evaluate(verifyItalyRegion);
+      if (regionIssue) throw new Error(regionIssue);
       if (!await selected(yesItem) || await selected(noItem)) throw new Error('Feed prodotto: Sì non verificabile.');
       if (!await onlyChoice(categoryItem, sectorGroup)) throw new Error('Sottocategoria non verificabile come unica scelta: ' + category);
     };
@@ -521,6 +545,13 @@ async function main() {
         console.error(detail);
         if (error instanceof DirectoryUnavailableError) break;
       }
+    }
+    if (failures.length && process.stdin.isTTY && browser.pages().some(page => !page.isClosed())) {
+      console.log('Awin | Browser aperto per controllare l’errore. Premi Invio per chiudere (attesa massima: 2 minuti).');
+      const inspection = createInterface({ input: process.stdin });
+      const timer = setTimeout(() => inspection.close(), 120000);
+      try { for await (const line of inspection) break; }
+      finally { clearTimeout(timer); inspection.close(); }
     }
   } finally { await browser.close(); }
   const ledger = await fs.readFile(ledgerPath, 'utf8').catch(error => {

@@ -7,7 +7,7 @@ const { createInterface } = require('node:readline');
 
 const directory = 'https://ui.awin.com/awin/affiliate/3150312/merchant-directory/index/tab/active/page/1';
 const site = 'https://davimarz.github.io/scaladeiturchi/';
-const message = 'Salve, gestisco Scala dei Turchi (https://davimarz.github.io/scaladeiturchi/), una vetrina italiana di prodotti e offerte online. Vorrei promuovere il vostro catalogo con schede prodotto e collegamenti affiliati. Grazie.';
+const message = 'Salve, gestisco la web app "Scala dei Turchi" (https://davimarz.github.io/scaladeiturchi/), un portale interattivo dedicato alla pubblicazione di prodotti in offerta. Il nostro pubblico è composto da appassionati e acquirenti alla ricerca di offerte e nuove uscite. Intendiamo promuovere i prodotti e le vostre campagne tramite banner display dedicati e link affiliati diretti alle offerte del catalogo. Grazie.';
 
 const categories = [
   'Abbigliamento', 'Abbigliamento bambini', 'Abbigliamento femminile', 'Abbigliamento sportivo',
@@ -63,22 +63,31 @@ async function hasProductFeed(row) {
   });
 }
 
-async function selectWebsite(form) {
+const siteOptionLabel = /(?:^|[\s(\[])(?:https:\/\/)?davimarz\.github\.io\/scaladeiturchi\/?(?=$|[\s)\]])/i;
+
+async function selectWebsite(page, form) {
+  const nativeMatches = [];
   for (const select of await form.locator('select:visible').all()) {
-    const options = await select.locator('option').evaluateAll(items => items.map(item => ({ value: item.value, text: item.textContent })));
-    const option = options.find(item => item.text.trim().replace(/\/$/, '') === site.replace(/\/$/, ''));
-    if (option) {
-      await select.selectOption({ value: option.value });
-      return true;
-    }
+    const matches = await select.locator('option:not([disabled])').evaluateAll((items, pattern) =>
+      items.flatMap((item, index) => new RegExp(pattern, 'i').test(item.textContent) ? [index] : []), siteOptionLabel.source);
+    for (const index of matches) nativeMatches.push({ select, index });
   }
-  if (await form.getByText(site, { exact: true }).first().isVisible()) return true;
+  if (nativeMatches.length !== 0) {
+    if (nativeMatches.length !== 1) return false;
+    const { select, index } = nativeMatches[0];
+    const value = await select.locator('option:not([disabled])').nth(index).evaluate(item => item.index);
+    await select.selectOption({ index: value });
+    return true;
+  }
+
   const menu = form.getByRole('combobox').filter({ visible: true });
   if (await menu.count() !== 1) return false;
-  await menu.click({ timeout: 4000 });
-  const option = form.getByRole('option', { name: site, exact: true }).filter({ visible: true });
-  await option.waitFor({ timeout: 4000 });
-  await option.click({ timeout: 4000 });
+  await menu.click({ timeout: 7000 });
+  // Awin can render the options outside the application form.
+  const options = page.getByRole('option', { name: siteOptionLabel }).filter({ visible: true });
+  if (!await options.first().waitFor({ timeout: 8000 }).then(() => true, () => false)) return false;
+  if (await options.count() !== 1 || !await options.isEnabled()) return false;
+  await options.click({ timeout: 7000 });
   return true;
 }
 
@@ -433,8 +442,17 @@ async function runPass(confirmed, category) {
           !await form.getByText(/accetti di rispettare le condizioni specifiche/i).first().isVisible()) {
         throw new Error(name + ' | Condizioni o pulsante Iscriviti non identificati nel modulo.');
       }
-      if (!await selectWebsite(form)) {
-        throw new Error(name + ' | Il sito Scala dei Turchi non è selezionabile in Promozione.');
+      if (!await selectWebsite(page, form)) {
+        const detail = name + ' | Il sito ' + site + ' non compare come opzione selezionabile in Promozione. Nessuna richiesta inviata per questo advertiser.';
+        console.error(detail);
+        if (process.stdin.isTTY && !page.isClosed()) {
+          console.log('Controlla il menu nel browser. Premi Invio per chiudere (attesa massima: 2 minuti).');
+          const inspection = createInterface({ input: process.stdin });
+          const timer = setTimeout(() => inspection.close(), 120000);
+          try { for await (const line of inspection) break; }
+          finally { clearTimeout(timer); inspection.close(); }
+        }
+        throw new Error(detail);
       }
       await field.fill(message);
       await terms.check();

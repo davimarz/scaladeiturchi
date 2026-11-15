@@ -1,4 +1,18 @@
-# PowerShell: esegui questo blocco dalla cartella in cui hai salvato il file .cjs.
-# Passa --prova per controllare i candidati senza inviare; --scarica per i soli listini.
-# Nel menu scegli il numero della sottocategoria, oppure 0 per tutte.
-node ".\candidature-awin-per-categoria.cjs" --tutto
+# Incolla tutto il blocco in PowerShell, anche se il prompt mostra System32.
+# --tutto: candidature e listini. --scarica: solo listini. --prova: nessun invio.
+& {
+    $nome = 'candidature-awin-per-categoria.cjs'
+    $scriptAwin = Join-Path -Path (Get-Location).Path -ChildPath $nome
+    $sitoScala = 'https://davimarz.github.io/scaladeiturchi/'
+    if (-not (Test-Path -LiteralPath $scriptAwin -PathType Leaf) -or
+        -not (Select-String -LiteralPath $scriptAwin -SimpleMatch $sitoScala -Quiet)) {
+        $scriptAwin = (Read-Host 'Incolla il percorso completo del file .cjs di Scala dei Turchi').Trim().Trim('"', "'")
+    }
+    if (-not $scriptAwin -or -not (Test-Path -LiteralPath $scriptAwin -PathType Leaf) -or
+        -not (Select-String -LiteralPath $scriptAwin -SimpleMatch $sitoScala -Quiet)) {
+        Write-Host 'File non trovato o non appartenente a Scala dei Turchi. Usa Esplora file > Copia come percorso e riprova.'
+        return
+    }
+    $scriptAwin = (Get-Item -LiteralPath $scriptAwin).FullName
+    & node $scriptAwin --tutto
+}

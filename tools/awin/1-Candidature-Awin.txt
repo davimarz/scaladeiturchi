@@ -1,18 +1,10 @@
-# Incolla tutto il blocco in PowerShell, anche se il prompt mostra System32.
+# Incolla tutto il blocco in PowerShell, anche se si apre in System32.
 # --tutto: candidature e listini. --scarica: solo listini. --prova: nessun invio.
 & {
-    $nome = 'candidature-awin-per-categoria.cjs'
-    $scriptAwin = Join-Path -Path (Get-Location).Path -ChildPath $nome
-    $sitoScala = 'https://davimarz.github.io/scaladeiturchi/'
-    if (-not (Test-Path -LiteralPath $scriptAwin -PathType Leaf) -or
-        -not (Select-String -LiteralPath $scriptAwin -SimpleMatch $sitoScala -Quiet)) {
-        $scriptAwin = (Read-Host 'Incolla il percorso completo del file .cjs di Scala dei Turchi').Trim().Trim('"', "'")
-    }
-    if (-not $scriptAwin -or -not (Test-Path -LiteralPath $scriptAwin -PathType Leaf) -or
-        -not (Select-String -LiteralPath $scriptAwin -SimpleMatch $sitoScala -Quiet)) {
-        Write-Host 'File non trovato o non appartenente a Scala dei Turchi. Usa Esplora file > Copia come percorso e riprova.'
+    $scriptAwin = 'C:\Users\admin\awin-playwright\scaladeiturchi\candidature-awin-per-categoria.cjs'
+    if (-not (Test-Path -LiteralPath $scriptAwin -PathType Leaf)) {
+        Write-Error "File non trovato: $scriptAwin. Salva lo script aggiornato con il nome indicato."
         return
     }
-    $scriptAwin = (Get-Item -LiteralPath $scriptAwin).FullName
     & node $scriptAwin --tutto
 }

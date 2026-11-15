@@ -3,3 +3,4 @@ tools/awin/.awin-profile/
 tools/awin/.scarica-awin-*.cjs
 tools/awin/LISTINI*/
 .env*
+tools/awin/.candidature-scala.jsonl

@@ -6,8 +6,8 @@ const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 
 const args = process.argv.slice(2);
-const publisher = args[0];
-const mode = args[1] || '--prova';
+const publisher = args[0] && !args[0].startsWith('--') ? args.shift() : '3150312';
+const mode = args[0] || '--prova';
 const profile = process.env.AWIN_PROFILE_DIR || path.join(__dirname, '.awin-profile');
 const listini = path.join(__dirname, 'LISTINI');
 const ledgerPath = path.join(__dirname, '.candidature-scala.jsonl');
@@ -568,10 +568,10 @@ async function chooseCategories(value) {
 }
 
 async function main() {
-  if (!/^\d+$/.test(publisher || '') || args.length > 3 || !['--cartelle', '--prova', '--invia', '--scarica', '--tutto'].includes(mode)) {
-    throw new Error('Uso: node candidature-awin-per-categoria.cjs ID_PUBLISHER [--cartelle|--prova|--invia|--scarica|--tutto] [numero]');
+  if (!/^\d+$/.test(publisher) || args.length > 2 || !['--cartelle', '--prova', '--invia', '--scarica', '--tutto'].includes(mode)) {
+    throw new Error('Uso: node candidature-awin-per-categoria.cjs [ID_PUBLISHER] [--cartelle|--prova|--invia|--scarica|--tutto] [numero]');
   }
-  const chosen = await chooseCategories(args[2]);
+  const chosen = await chooseCategories(args[1]);
   console.log('Sottocategorie selezionate: ' + (chosen.length === categories.length ? 'tutte (' + categories.length + ')' : chosen[0]));
   for (const category of chosen) await fs.mkdir(path.join(listini, category), { recursive: true });
   if (mode === '--cartelle') { console.log(chosen.length + ' cartelle pronte in ' + listini); return; }

@@ -1,18 +1,14 @@
+const { chromium } = require('playwright');
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const { createInterface } = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { createInterface } = require('node:readline');
 
-const args = process.argv.slice(2);
-const publisher = args[0] && !args[0].startsWith('--') ? args.shift() : '3150312';
-const mode = args[0] || '--prova';
-const profile = process.env.AWIN_PROFILE_DIR || path.join(__dirname, '.awin-profile');
-const ledgerPath = path.join(__dirname, '.candidature-scala.jsonl');
-const directory = 'https://ui.awin.com/awin/affiliate/' + publisher + '/merchant-directory/index/tab/active/page/1';
+const directory = 'https://ui.awin.com/awin/affiliate/3150312/merchant-directory/index/tab/active/page/1';
 const site = 'https://davimarz.github.io/scaladeiturchi/';
-const message = 'Salve, gestisco Scala dei Turchi (https://davimarz.github.io/scaladeiturchi/), una vetrina italiana che aiuta i visitatori a scoprire prodotti e offerte online. Vorrei promuovere il vostro catalogo con schede prodotto e collegamenti affiliati tratti dai listini Awin. Grazie.';
-const sector = 'Retail & Shopping';
+const message = 'Salve, gestisco Scala dei Turchi (https://davimarz.github.io/scaladeiturchi/), una vetrina italiana di prodotti e offerte online. Vorrei promuovere il vostro catalogo con schede prodotto e collegamenti affiliati. Grazie.';
+
 const categories = [
   'Abbigliamento', 'Abbigliamento bambini', 'Abbigliamento femminile', 'Abbigliamento sportivo',
   'Abbigliamento uomo', 'Accessori Elettronica', 'Accessori abbigliamento', 'Acquisti di gruppo',
@@ -24,8 +20,6 @@ const categories = [
   'Salute e bellezza', 'Stampa e foto', 'Supermercati di elettronica', 'Veterinaria e animali',
   'Vini, alcolici e tabacchi',
 ];
-const key = value => value.trim().replace(/\s+/g, ' ').toLowerCase();
-const canSubmit = mode === '--invia';
 
 const joinLabel = /^\s*\+?\s*Iscriviti\s*$/i;
 
@@ -45,40 +39,16 @@ async function joinControl(row) {
   return await action.count() === 1 ? action : label;
 }
 
-const eligibleStatus = /\(\s*Non iscritt[oi]\s*\)\s*$/i;
-const advertiserKey = name => key(name.replace(eligibleStatus, ''));
+function unjoinedView(page) {
+  const title = /^Non iscritt[oi]\s*\(\s*[\d.,\s]+\)$/i;
+  const join = joinByRole(page).or(page.getByText(joinLabel));
+  const promote = page.getByText('Promuovi', { exact: true });
+  const listing = page.getByRole('table')
+    .filter({ has: page.getByRole('columnheader', { name: /feed prodotto/i }) })
+    .filter({ has: page.getByRole('row').filter({ has: join }) })
+    .filter({ hasNot: promote });
 
-// Awin can display parent nodes as partially selected. Check the actual choices.
-function onlySelectedLeaf(target, root) {
-  if (!root?.contains(target)) return false;
-  const checked = item => item.classList.contains('selected') ||
-    [...item.querySelectorAll('input[type="checkbox"]:checked, [role="checkbox"][aria-checked="true"]')]
-      .some(control => control.closest('li.checkbox') === item);
-  return checked(target) && ![...root.querySelectorAll('li.checkbox')].some(item =>
-    item !== target && !item.contains(target) && checked(item));
-}
-
-function verifyItalyRegion(target) {
-  // The Regioni heading can be a sibling of this tree, not inside it.
-  const label = item => [...item.children].filter(child => child.tagName !== 'UL')
-    .map(child => child.textContent.replace(/\s+/g, ' ').trim());
-  const continents = ['Africa', 'Asia', 'America del nord', 'Oceania', 'America del sud'];
-  if (!label(target).includes('Italia')) return 'Casella Italia non riconosciuta.';
-  for (let list = target.parentElement; list; list = list.parentElement) {
-    if (list.tagName !== 'UL') continue;
-    const branches = [...list.children].filter(item => item.matches('li.checkbox'));
-    const europe = branches.find(item => item.contains(target) && label(item).includes('Europa'));
-    if (!europe || !branches.some(item => label(item).some(value => continents.includes(value)))) continue;
-    const checked = item => item.classList.contains('selected') ||
-      [...item.querySelectorAll('input[type="checkbox"]:checked, [role="checkbox"][aria-checked="true"]')]
-        .some(control => control.closest('li.checkbox') === item);
-    if (!checked(target)) return 'Italia non selezionata.';
-    const others = [...list.querySelectorAll('li.checkbox')]
-      .filter(item => item !== target && !item.contains(target) && checked(item));
-    return others.length ? 'Altre regioni selezionate: ' + others.map(item =>
-      label(item).find(Boolean) || 'senza nome').join(', ') : null;
-  }
-  return 'Gruppo delle regioni non riconosciuto attorno a Italia.';
+  return page.getByText(title).or(listing).filter({ visible: true }).first();
 }
 
 async function hasProductFeed(row) {
@@ -86,8 +56,7 @@ async function hasProductFeed(row) {
     const table = element.closest('table, [role="table"], [role="grid"]');
     if (!table) return false;
     const label = value => (value ?? '').replace(/\s+/g, ' ').trim();
-    const headerRow = table.querySelector('thead tr:last-child');
-    const headers = [...(headerRow?.cells ?? table.querySelectorAll('[role="columnheader"]'))];
+    const headers = [...table.querySelectorAll('thead tr:last-child th, [role="columnheader"]')];
     const column = headers.findIndex(header => /^(feed prodotto|product feed)$/i.test(label(header.innerText)));
     const cells = [...element.children].filter(cell => cell.matches('td, [role="cell"], [role="gridcell"]'));
     return column >= 0 && /^(s[ìi]|yes)$/i.test(label(cells[column]?.innerText));
@@ -217,58 +186,79 @@ async function submitSavedLogin(page) {
     return 'Destinazione del login Awin non riconosciuta.';
   }
   await loginButton.click();
-  console.log('Awin | richiesta di accesso inviata; attendo l’elenco advertiser.');
   return null;
 }
 
-class DirectoryUnavailableError extends Error {}
-
-async function waitForDirectory(page, ready, timeout) {
-  const deadline = Date.now() + timeout;
-  while (!page.isClosed()) {
-    if (await ready()) return true;
-    if (Date.now() >= deadline) return false;
-    await new Promise(resolve => setTimeout(resolve, 400));
-  }
-  return false;
-}
-
-async function runPass(browser, category, confirmed, onMatch) {
-    console.log('Scala dei Turchi | Italia | Feed prodotto: Sì | ' + category + ' | Candidature ai non iscritti');
+async function runPass(confirmed, category) {
+  const selection = { sector: 'Retail & Shopping', category };
+  console.log('Scala dei Turchi | Italia | Feed prodotto: Sì | Retail & Shopping / ' + category);
+  let browser;
+  try {
+    browser = await chromium.launchPersistentContext(path.join(__dirname, '.awin-profile'), { headless: false });
     const page = browser.pages()[0] ?? await browser.newPage();
     page.setDefaultTimeout(7000);
     await page.goto(directory, { waitUntil: 'domcontentloaded' });
-    const directoryHeading = page.getByText(/^(?:Tutti gli advertiser|Non iscritt[oi])\s*\([\d.,\s]+\)$/i)
+    const unjoinedLabel = /^Non iscritt[oi]$/i;
+    const tabText = page.getByText(unjoinedLabel).filter({ visible: true });
+    const tabAction = tabText.locator('xpath=ancestor-or-self::*[self::a or self::button or @role="tab" or @role="button"][1]')
       .filter({ visible: true }).first();
-    const feedTable = page.getByRole('table').filter({ has: page.getByRole('columnheader', { name: /feed prodotto/i }) }).filter({ visible: true });
-    const directoryReady = async () => {
-      const url = new URL(page.url());
-      const directoryPath = new URL(directory).pathname.split('/tab/')[0];
-      return url.origin === 'https://ui.awin.com' &&
-        (url.pathname === directoryPath || url.pathname.startsWith(directoryPath + '/')) &&
-        (await feedTable.count() === 1 || await directoryHeading.isVisible());
-    };
+    const nonIscritto = tabText.first();
     if (!isAwinLoginUrl(page.url())) {
       await Promise.any([
-        feedTable.first().or(directoryHeading).first().waitFor({ timeout: 8000 }),
+        nonIscritto.waitFor({ timeout: 8000 }),
         page.waitForURL(url => isAwinLoginUrl(url.href), { timeout: 8000 })
       ]).catch(() => {});
     }
     if (isAwinLoginUrl(page.url())) {
       const issue = await submitSavedLogin(page).catch(() => 'Accesso automatico non completato.');
-      if (issue) console.log('Awin | ' + issue);
+      if (issue) throw new Error(issue);
     }
-    if (!await waitForDirectory(page, directoryReady, 12000)) {
-      console.log('Awin | Completa l’accesso o la verifica nel browser aperto. Se sei nella dashboard, apri Advertiser → I miei programmi. Attendo fino a 2 minuti e riprendo automaticamente.');
-      if (!await waitForDirectory(page, directoryReady, 120000)) {
-        throw new DirectoryUnavailableError('Elenco advertiser non raggiunto. Completa l’accesso ad Awin nel profilo Playwright, poi riprova.');
+    await nonIscritto.waitFor({ timeout: 15000 }).catch(() => {
+      throw new Error('La pagina advertiser non è disponibile dopo l’accesso. Verifica eventuali richieste di sicurezza in Awin.');
+    });
+    const unjoined = unjoinedView(page);
+    if (!await unjoined.isVisible()) {
+      const target = await nonIscritto.evaluate(element => {
+        const action = element.closest('a, button, [role="tab"], [role="button"]') ?? element;
+        const href = action.getAttribute('href');
+        return { tag: action.tagName, role: action.getAttribute('role'), href: href && !href.startsWith('#') ? action.href : null };
+      });
+      const waitForListing = () => unjoined.waitFor({ timeout: 6000 }).then(() => true, () => false);
+      await nonIscritto.click();
+      console.log('Awin | clic sull’etichetta «Non iscritto».');
+      let opened = await waitForListing();
+
+      if (!opened && target.href) {
+        const link = new URL(target.href);
+        const current = new URL(page.url());
+        const directoryPath = new URL(directory).pathname.split('/tab/')[0];
+        if (link.origin === new URL(directory).origin &&
+            link.pathname.startsWith(directoryPath + '/') &&
+            (link.pathname !== current.pathname || link.search !== current.search)) {
+          console.log('Awin | apro il collegamento di «Non iscritto» presente nella pagina.');
+          await page.goto(link.href, { waitUntil: 'domcontentloaded' });
+          opened = await waitForListing();
+        }
+      }
+
+      if (!opened && await tabAction.isVisible()) {
+        console.log('Awin | attivo il controllo «Non iscritto» con Invio nel browser.');
+        await tabAction.press('Enter');
+        opened = await waitForListing();
+      }
+
+      if (!opened) {
+        const personal = await page.getByText(/^Advertiser personali\b/i).filter({ visible: true }).first().isVisible();
+        const control = target.tag + (target.role ? '/' + target.role : '');
+        throw new Error('«Non iscritto» non confermata. Controllo Awin: ' + control +
+          (personal ? '. La pagina mostra ancora «Advertiser personali».' : '. La tabella attesa non è comparsa.'));
       }
     }
+    console.log('Awin | scheda Non iscritto verificata. Controllo i candidati e il feed prodotto per riga.');
 
     const exactVisible = label => page.getByText(label, { exact: true }).filter({ visible: true });
     const filterItem = label => label.locator('xpath=ancestor-or-self::li[contains(concat(" ", normalize-space(@class), " "), " checkbox ")][1]');
-    const selected = item => item.evaluate(node =>
-      node.classList.contains('selected') || node.querySelector(':scope > input[type="checkbox"]:checked') !== null);
+    const selected = item => item.evaluate(node => node.classList.contains('selected'));
     const branchItem = label => label.locator('xpath=ancestor-or-self::li[./ul or ./*[contains(concat(" ", normalize-space(@class), " "), " hitarea ")]][1]');
     async function openBranch(label, child) {
       if (await child.count() === 1 && await child.isVisible()) return;
@@ -330,18 +320,14 @@ async function runPass(browser, category, confirmed, onMatch) {
       if (await selected(item) !== checked) await label.click();
       await item.and(page.locator(checked ? '.selected' : ':not(.selected)')).waitFor();
     }
-    const onlyChoice = async (item, group) => {
-      if (await item.count() !== 1 || await group.count() !== 1) return false;
-      const root = await group.elementHandle();
-      try { return await item.evaluate(onlySelectedLeaf, root); }
-      finally { await root.dispose(); }
-    };
+    const requiredFiltersActive = async () =>
+      await selected(italyItem) && await selected(yesItem) && !await selected(noItem);
     console.log('Awin | Italia e Feed prodotto: Sì selezionati.');
 
-    const sectorLabel = page.getByText(sector, { exact: true }).filter({ visible: true });
+    const sectorLabel = page.getByText(selection.sector, { exact: true }).filter({ visible: true });
     await sectorLabel.waitFor();
     const sectorGroup = branchItem(sectorLabel);
-    const scopedCategory = sectorGroup.getByText(category, { exact: true }).filter({ visible: true });
+    const scopedCategory = sectorGroup.getByText(selection.category, { exact: true }).filter({ visible: true });
     const categoryText = scopedCategory;
     await openBranch(sectorLabel, categoryText);
     const categoryItem = filterItem(categoryText);
@@ -350,10 +336,10 @@ async function runPass(browser, category, confirmed, onMatch) {
       const listing = page.getByRole('table')
         .filter({ has: page.getByRole('columnheader', { name: /feed prodotto/i }) })
         .filter({ visible: true }).first();
-      const before = await listing.textContent().catch(() => null);
+      const before = await listing.textContent();
       await categoryText.click();
       const deadline = Date.now() + 7000;
-      while (before !== null && await listing.isVisible() && await listing.textContent() === before) {
+      while (await listing.isVisible() && await listing.textContent() === before) {
         if (Date.now() >= deadline) {
           throw new Error('Awin ha selezionato la sottocategoria, ma il contenuto dei risultati è rimasto identico. Riprova con il filtro già selezionato.');
         }
@@ -361,24 +347,11 @@ async function runPass(browser, category, confirmed, onMatch) {
       }
     }
     if (!await selected(categoryItem)) throw new Error('Awin non ha applicato la sottocategoria richiesta.');
-    console.log('Awin | filtro applicato: ' + sector + ' / ' + category);
+    await unjoined.waitFor();
+    console.log('Awin | filtro applicato: ' + selection.sector + ' / ' + selection.category);
 
-    const table = feedTable;
-    if (await table.count() !== 1 && !await page.getByText(/nessun (?:advertiser|risultato|programma)|no (?:advertisers|results|programmes)/i).first().isVisible()) {
-      throw new Error('Tabella con colonna Feed prodotto non verificata.');
-    }
-    const allRows = table.locator('tbody tr:visible');
-    const rows = allRows
-      .filter({ has: page.locator('td:first-child').filter({ hasText: eligibleStatus }) })
-      .filter({ has: joinByRole(page).or(page.getByText(joinLabel)) });
-    const verifyScope = async () => {
-      if (!await directoryReady()) throw new Error('Elenco advertiser non verificabile.');
-      if (await italyItem.count() !== 1) throw new Error('Casella Italia non identificabile.');
-      const regionIssue = await italyItem.evaluate(verifyItalyRegion);
-      if (regionIssue) throw new Error(regionIssue);
-      if (!await selected(yesItem) || await selected(noItem)) throw new Error('Feed prodotto: Sì non verificabile.');
-      if (!await onlyChoice(categoryItem, sectorGroup)) throw new Error('Sottocategoria non verificabile come unica scelta: ' + category);
-    };
+    const table = page.getByRole('table').filter({ has: page.getByRole('columnheader', { name: /feed prodotto/i }) }).filter({ visible: true });
+    const rows = table.locator('tbody tr:visible').filter({ has: joinByRole(page).or(page.getByText(joinLabel)) });
     const overlay = page.locator('.blockUI.blockOverlay:visible');
     const waitForResults = () => overlay.first().waitFor({ state: 'hidden', timeout: 30000 });
     const seen = new Set();
@@ -387,7 +360,9 @@ async function runPass(browser, category, confirmed, onMatch) {
     const visitedPages = new Set();
     while (true) {
       await waitForResults();
-      await verifyScope();
+      if (!await requiredFiltersActive() || !await selected(categoryItem) || !await unjoined.isVisible()) {
+        throw new Error('La scheda o uno dei filtri richiesti non sono più attivi.');
+      }
       const names = (await rows.locator('td:first-child').allTextContents()).map(name => name.trim()).filter(Boolean);
       const name = names.find(candidate => !seen.has(candidate));
       if (!name) {
@@ -415,16 +390,13 @@ async function runPass(browser, category, confirmed, onMatch) {
         continue;
       }
       seen.add(name);
-      const exactName = new RegExp('^\\s*' + name.split(/\s+/).map(word =>
-        word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+') + '\\s*$');
-      const row = rows.filter({ has: page.locator('td:first-child').filter({ hasText: exactName }) });
+      if (confirmed.has(name)) {
+        throw new Error(name + ' | candidatura già confermata, ma Awin mostra ancora Iscriviti. Controlla In attesa.');
+      }
+      const row = rows.filter({ has: page.getByText(name, { exact: true }) });
       if (await row.count() !== 1 || !await hasProductFeed(row)) {
         console.log(name + ' | riga ambigua o feed prodotto non confermato');
         skipped++;
-        continue;
-      }
-      if (confirmed.has(advertiserKey(name))) {
-        console.log(name + ' | operazione già registrata; controlla In attesa in Awin.');
         continue;
       }
       const join = await joinControl(row);
@@ -437,12 +409,6 @@ async function runPass(browser, category, confirmed, onMatch) {
         console.log(name + ' | controllo «+ Iscriviti» disabilitato');
         skipped++;
         continue;
-      }
-      onMatch(name, category);
-      if (!canSubmit) { console.log(name + ' | idoneo'); continue; }
-      await verifyScope();
-      if (await row.count() !== 1 || !await hasProductFeed(row)) {
-        throw new Error(name + ' | riga o feed cambiati prima dell’iscrizione.');
       }
       try {
         await join.click({ timeout: 30000 });
@@ -472,18 +438,38 @@ async function runPass(browser, category, confirmed, onMatch) {
       }
       await field.fill(message);
       await terms.check();
-      await fs.appendFile(ledgerPath, JSON.stringify({ publisher, name, category, status: 'invio-avviato', at: new Date().toISOString() }) + '\n');
-      confirmed.add(advertiserKey(name));
       await submit.click();
       if (!await acknowledgeSubmission(page)) {
         throw new Error(name + ' | Invio tentato, ma il testo del popup non è stato riconosciuto. Controlla «In attesa» prima di riprovare.');
       }
-      await fs.appendFile(ledgerPath, JSON.stringify({ publisher, name, category, status: 'confermato', at: new Date().toISOString() }) + '\n');
+      confirmed.add(name);
       submitted++;
       console.log(name + ' | richiesta inviata, ricevuta Awin verificata');
     }
     console.log('Invii confermati da Awin: ' + submitted + ' su ' + seen.size + ' advertiser esaminati.');
     return { submitted, skipped };
+  } finally {
+    await browser?.close();
+  }
+}
+
+async function runCategory(category) {
+  const confirmed = new Set();
+  for (;;) {
+    const { submitted, skipped } = await runPass(confirmed, category);
+    if (submitted) {
+      console.log('Awin | ricontrollo dalla prima pagina: i risultati possono essersi spostati dopo gli invii.');
+      continue;
+    }
+    console.log('Totale candidature confermate: ' + confirmed.size);
+    if (skipped) {
+      console.log('Scansione terminata. Advertiser da verificare manualmente: ' + skipped);
+      process.exitCode = 2;
+    } else {
+      console.log('Nessun altro advertiser candidabile con i filtri impostati.');
+    }
+    return;
+  }
 }
 
 function parseCategoryChoice(value) {
@@ -516,54 +502,14 @@ async function chooseCategories(value) {
 }
 
 async function main() {
-  if (!/^\d+$/.test(publisher) || args.length > 2 || !['--prova', '--invia'].includes(mode)) {
-    throw new Error('Uso: node candidature-awin-per-categoria.cjs [ID_PUBLISHER] [--prova|--invia] [numero]');
+  const chosen = await chooseCategories();
+  for (const category of chosen) {
+    console.log('Sottocategoria selezionata: ' + category);
+    await runCategory(category);
   }
-  const chosen = await chooseCategories(args[1]);
-  console.log('Sottocategorie selezionate: ' + (chosen.length === categories.length ? 'tutte (' + categories.length + ')' : chosen[0]));
-  const { chromium } = require('playwright');
-  const previous = await fs.readFile(ledgerPath, 'utf8').catch(error => {
-    if (error.code === 'ENOENT') return '';
-    throw error;
-  });
-  const confirmed = new Set(previous.split('\n').filter(Boolean).map(line => JSON.parse(line))
-    .filter(entry => entry.publisher === publisher).map(entry => advertiserKey(entry.name)));
-  const candidates = new Set(), failures = [];
-  const browser = await chromium.launchPersistentContext(profile, { headless: false });
-  try {
-    for (const category of chosen) {
-      try {
-        for (let pass = 0; ; pass++) {
-          const result = await runPass(browser, category, confirmed, name => candidates.add(key(name)));
-          if (result.skipped) failures.push(category + ': ' + result.skipped + ' righe da verificare');
-          if (!result.submitted) break;
-          if (pass === 7) throw new Error('Risultati ancora in movimento dopo otto passaggi. Ripeti il comando.');
-        }
-      } catch (error) {
-        const detail = category + ' | ' + error.message;
-        failures.push(detail);
-        console.error(detail);
-        if (error instanceof DirectoryUnavailableError) break;
-      }
-    }
-    if (failures.length && process.stdin.isTTY && browser.pages().some(page => !page.isClosed())) {
-      console.log('Awin | Browser aperto per controllare l’errore. Premi Invio per chiudere (attesa massima: 2 minuti).');
-      const inspection = createInterface({ input: process.stdin });
-      const timer = setTimeout(() => inspection.close(), 120000);
-      try { for await (const line of inspection) break; }
-      finally { clearTimeout(timer); inspection.close(); }
-    }
-  } finally { await browser.close(); }
-  const ledger = await fs.readFile(ledgerPath, 'utf8').catch(error => {
-    if (error.code === 'ENOENT') return previous;
-    throw error;
-  });
-  const sent = ledger.slice(previous.length).split('\n').filter(Boolean).map(line => JSON.parse(line))
-    .filter(entry => entry.publisher === publisher && entry.status === 'confermato').length;
-  console.log('Invii confermati: ' + sent + ' | candidati rilevati: ' + candidates.size +
-    ' | segnalazioni: ' + failures.length);
-  for (const detail of failures) console.log('Da verificare: ' + detail);
-  if (failures.length) process.exitCode = 2;
 }
 
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+main().catch(error => {
+  console.error('Preparazione interrotta: ' + error.message);
+  process.exitCode = 1;
+});

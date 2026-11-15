@@ -194,7 +194,20 @@ async function submitSavedLogin(page) {
     return 'Destinazione del login Awin non riconosciuta.';
   }
   await loginButton.click();
+  console.log('Awin | richiesta di accesso inviata; attendo l’elenco advertiser.');
   return null;
+}
+
+class DirectoryUnavailableError extends Error {}
+
+async function waitForDirectory(page, ready, timeout) {
+  const deadline = Date.now() + timeout;
+  while (!page.isClosed()) {
+    if (await ready()) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 400));
+  }
+  return false;
 }
 
 async function runPass(browser, category, confirmed, onMatch) {
@@ -204,19 +217,30 @@ async function runPass(browser, category, confirmed, onMatch) {
     await page.goto(directory, { waitUntil: 'domcontentloaded' });
     const directoryHeading = page.getByText(/^(?:Tutti gli advertiser|Non iscritt[oi])\s*\([\d.,\s]+\)$/i)
       .filter({ visible: true }).first();
+    const feedTable = page.getByRole('table').filter({ has: page.getByRole('columnheader', { name: /feed prodotto/i }) }).filter({ visible: true });
+    const directoryReady = async () => {
+      const url = new URL(page.url());
+      const directoryPath = new URL(directory).pathname.split('/tab/')[0];
+      return url.origin === 'https://ui.awin.com' &&
+        (url.pathname === directoryPath || url.pathname.startsWith(directoryPath + '/')) &&
+        (await feedTable.count() === 1 || await directoryHeading.isVisible());
+    };
     if (!isAwinLoginUrl(page.url())) {
       await Promise.any([
-        directoryHeading.waitFor({ timeout: 8000 }),
+        feedTable.first().or(directoryHeading).first().waitFor({ timeout: 8000 }),
         page.waitForURL(url => isAwinLoginUrl(url.href), { timeout: 8000 })
       ]).catch(() => {});
     }
     if (isAwinLoginUrl(page.url())) {
       const issue = await submitSavedLogin(page).catch(() => 'Accesso automatico non completato.');
-      if (issue) throw new Error(issue);
+      if (issue) console.log('Awin | ' + issue);
     }
-    await directoryHeading.waitFor({ timeout: 15000 }).catch(() => {
-      throw new Error('La pagina advertiser non è disponibile dopo l’accesso. Verifica eventuali richieste di sicurezza in Awin.');
-    });
+    if (!await waitForDirectory(page, directoryReady, 12000)) {
+      console.log('Awin | Completa l’accesso o la verifica nel browser aperto. Se sei nella dashboard, apri Advertiser → I miei programmi. Attendo fino a 2 minuti e riprendo automaticamente.');
+      if (!await waitForDirectory(page, directoryReady, 120000)) {
+        throw new DirectoryUnavailableError('Elenco advertiser non raggiunto. Completa l’accesso ad Awin nel profilo Playwright, poi riprova.');
+      }
+    }
 
     const exactVisible = label => page.getByText(label, { exact: true }).filter({ visible: true });
     const filterItem = label => label.locator('xpath=ancestor-or-self::li[contains(concat(" ", normalize-space(@class), " "), " checkbox ")][1]');
@@ -317,7 +341,7 @@ async function runPass(browser, category, confirmed, onMatch) {
     if (!await selected(categoryItem)) throw new Error('Awin non ha applicato la sottocategoria richiesta.');
     console.log('Awin | filtro applicato: ' + sector + ' / ' + category);
 
-    const table = page.getByRole('table').filter({ has: page.getByRole('columnheader', { name: /feed prodotto/i }) }).filter({ visible: true });
+    const table = feedTable;
     if (await table.count() !== 1 && !await page.getByText(/nessun (?:advertiser|risultato|programma)|no (?:advertisers|results|programmes)/i).first().isVisible()) {
       throw new Error('Tabella con colonna Feed prodotto non verificata.');
     }
@@ -326,7 +350,7 @@ async function runPass(browser, category, confirmed, onMatch) {
       .filter({ has: page.locator('td:first-child').filter({ hasText: eligibleStatus }) })
       .filter({ has: joinByRole(page).or(page.getByText(joinLabel)) });
     const verifyScope = async () => {
-      if (!await directoryHeading.isVisible()) throw new Error('Elenco advertiser non verificabile.');
+      if (!await directoryReady()) throw new Error('Elenco advertiser non verificabile.');
       if (!await onlyChoice(italyItem, regionRoot)) throw new Error('Regione Italia non verificabile come unica regione.');
       if (!await selected(yesItem) || await selected(noItem)) throw new Error('Feed prodotto: Sì non verificabile.');
       if (!await onlyChoice(categoryItem, sectorGroup)) throw new Error('Sottocategoria non verificabile come unica scelta: ' + category);
@@ -495,6 +519,7 @@ async function main() {
         const detail = category + ' | ' + error.message;
         failures.push(detail);
         console.error(detail);
+        if (error instanceof DirectoryUnavailableError) break;
       }
     }
   } finally { await browser.close(); }

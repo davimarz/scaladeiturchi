@@ -1,0 +1,5 @@
+node_modules/
+tools/awin/.awin-profile/
+tools/awin/.scarica-awin-*.cjs
+tools/awin/LISTINI*/
+.env*

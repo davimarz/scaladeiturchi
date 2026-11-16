@@ -6,6 +6,30 @@ const search = document.getElementById('cerca');
 const category = document.getElementById('categoria');
 const euro = new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR' });
 const normalize = value => value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+
+// The supplier's full paths remain in the catalog; the menu uses broad families.
+const categoryFamilies = [
+  ['Abbigliamento', ['clothing', "men's clothing", "women's clothing", 'underwear & sleepwears', 'apparel', 'abbigliamento', 'abbigliamento uomo', 'abbigliamento femminile', 'biancheria intima']],
+  ['Accessori', ['apparel accessories', 'accessories', 'accessori', 'accessori abbigliamento']],
+  ['Borse e valigeria', ['luggage & bags', 'bags', 'borse', 'valigeria']],
+  ['Calzature', ['shoes', 'footwear', 'calzature', 'scarpe']],
+  ['Gioielli e orologi', ['jewelry & accessories', 'jewellery', 'watches', 'gioielleria', 'gioielli', 'orologi']],
+  ['Elettronica e informatica', ['cellphones & telecommunications', 'computer & office', 'consumer electronics', 'informatica', 'elettronica', 'audio-video', 'accessori elettronica', 'supermercati di elettronica']],
+  ['Casa e giardino', ['home appliances', 'home & garden', 'casa', 'casa e giardinaggio', 'elettrodomestici', 'mobili e arredamento', 'bricolage']],
+  ['Bellezza e cura personale', ['hair extensions & wigs', 'beauty & health', 'salute e bellezza', 'bellezza']],
+  ['Bambini e neonati', ['mother & kids', 'baby', 'bambini e bebè', 'abbigliamento bambini']],
+  ['Sport e tempo libero', ['sports & outdoor', 'sport', 'abbigliamento sportivo', 'attrezzature sportive']],
+  ['Giochi e giocattoli', ['toys & games', 'toys', 'giochi']],
+  ['Animali', ['pet products', 'pet supplies', 'veterinaria e animali']],
+  ['Benessere intimo', ['sex products', 'erotico']],
+  ['Sigarette elettroniche', ['vape']],
+];
+const familyByRoot = new Map(categoryFamilies.flatMap(([family, roots]) => roots.map(root => [normalize(root), family])));
+function categoryFamily(value) {
+  const root = String(value ?? '').split(/\s*(?:\/|>|›|→|\|)\s*/, 1)[0].trim().replace(/[’‘]/g, "'");
+  return familyByRoot.get(normalize(root)) ?? 'Altri prodotti';
+}
+
 const price = value => Number(String(value ?? '').replace(',', '.'));
 let manifest, pages, pending, offset, controller, revision = 0, timer;
 
@@ -60,7 +84,7 @@ async function load() {
       if (revision !== current) return;
       offset++;
       reads++;
-      pending.push(...rows.filter(item => (!selected || selected === item.category) &&
+      pending.push(...rows.filter(item => (!selected || selected === categoryFamily(item.category)) &&
         terms.every(term => normalize([item.name, item.brand, item.merchant].join(' ')).includes(term))));
     }
     const fragment = document.createDocumentFragment();
@@ -87,7 +111,7 @@ function reset() {
   controller?.abort();
   controller = new AbortController();
   revision++;
-  pages = manifest.pages.filter(page => !category.value || page.categories.includes(category.value));
+  pages = manifest.pages.filter(page => !category.value || page.categories.some(name => categoryFamily(name) === category.value));
   offset = 0;
   pending = [];
   grid.replaceChildren();
@@ -98,7 +122,9 @@ function start() {
   json('indice.json').then(data => {
     manifest = data;
     category.replaceChildren(new Option('Tutte le categorie', ''));
-    for (const name of data.categories) category.add(new Option(name, name));
+    const families = [...new Set(data.categories.map(categoryFamily))];
+    families.sort((a, b) => (a === 'Altri prodotti') - (b === 'Altri prodotti') || a.localeCompare(b, 'it'));
+    for (const name of families) category.add(new Option(name, name));
     reset();
   }).catch(() => {
     statusNode.textContent = 'Catalogo non disponibile.';

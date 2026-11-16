@@ -143,6 +143,45 @@ function trackingLink(record, publisher) {
   return link.href;
 }
 
+
+const commonColours = new Set(('nero|bianco|rosso|verde|blu|azzurro|grigio|giallo|rosa|viola|lilla|marrone|arancione|beige|bordeaux|multicolore|black|white|red|green|blue|grey|gray|yellow|pink|purple|brown|orange|multicolor').split('|'));
+const modelText = value => normalize(value).normalize('NFKC').replace(/[‐‑–—]/g, '-');
+function modelVariant(record, name, merchant, category) {
+  const size = modelText(pick(record['fashion:size'], record.size, record.product_size));
+  const colour = modelText(pick(record.colour, record.color, record.product_colour, record.product_color));
+  const genderText = modelText([pick(record.gender, record['fashion:gender']), name, category].join(' '));
+  const woman = /(?:^|\W)(?:donna|women|woman|female|femminile)(?:\W|$)/i.test(genderText);
+  const man = /(?:^|\W)(?:uomo|men|man|male|maschile)(?:\W|$)/i.test(genderText);
+  const gender = woman && !man ? 'donna' : man && !woman ? 'uomo' : '';
+  const preferred = gender === 'donna' ? ['m', 's'] : gender === 'uomo' ? ['m', 'l'] : ['m'];
+  const sizeIndex = preferred.indexOf(size);
+  // Either preferred size wins over other sizes. Price breaks ties.
+  const rank = sizeIndex < 0 ? 1 : 0;
+  const parent = modelText(pick(record.item_group_id, record.parent_product_id));
+  const model = modelText(pick(record.model_number, record.product_model));
+  const pattern = modelText(record.pattern);
+  const parts = modelText(name).split(/\s+-\s+/);
+  let trimmed = false;
+  while (parts.length > 1) {
+    const suffix = parts.at(-1);
+    if (!commonColours.has(suffix) && (!colour || suffix !== colour) &&
+        (!size || suffix !== size && suffix !== 'taglia ' + size && suffix !== 'size ' + size)) break;
+    parts.pop();
+    trimmed = true;
+  }
+  // Cisalfa parent IDs can identify individual colours. Its titles explicitly
+  // include the type and audience before a separate colour suffix.
+  const cisTitle = /^cisalfa sport it$/i.test(merchant) && trimmed && parts.length >= 3;
+  const identity = cisTitle || !model && !parent && (size || colour || trimmed)
+    ? ['titolo', parts.join(' - ')]
+    : model ? ['modello', model] : parent ? ['gruppo', parent] : null;
+  return {
+    rank,
+    modelKey: identity && JSON.stringify([modelText(merchant), modelText(pick(record.brand_name, record.brand)),
+      modelText(category), gender, pattern, ...identity])
+  };
+}
+
 function offer(record, merchant, publisher, reject = () => null) {
   const name = pick(record.product_name, record.title);
   const availability = normalize(pick(record.availability, record.in_stock, record.stock_status));
@@ -168,7 +207,7 @@ function offer(record, merchant, publisher, reject = () => null) {
   const category = pick(record.merchant_category, record.merchant_product_category_path, record.category_name, record.product_type)
     .split(/\s*>\s*/)[0] || 'Altri prodotti';
   const shipping = cents(record.delivery_cost, currency);
-  return { key, current, shipping, name, price: euro(current),
+  return { key, current, shipping, name, price: euro(current), ...modelVariant(record, name, merchant, category),
     image: image.href, url, merchant, category, brand: pick(record.brand_name, record.brand),
     ...(originalPrice && { originalPrice: euro(originalPrice) }),
     ...(referencePrice && { referencePrice: euro(referencePrice) }) };
@@ -199,7 +238,8 @@ function main(repo, directory, publisher) {
   });
   const feeds = walk(directory).sort();
   if (!feeds.length) throw new Error('Nessun listino Awin da importare.');
-  const all = [];
+  let totalValid = 0;
+  const models = new Map();
   for (const filename of feeds) {
     let valid = 0;
     let invalid = 0;
@@ -210,7 +250,13 @@ function main(repo, directory, publisher) {
     };
     for (const row of records(filename, () => invalid++)) {
       const item = offer(row, pick(row.merchant_name, row.advertiser_name, path.basename(filename).replace(sourceExtension, '')), publisher, reject);
-      if (item) { valid++; all.push(item); }
+      if (item) {
+        valid++;
+        const key = item.modelKey ?? JSON.stringify([item.merchant, item.key]);
+        const best = models.get(key);
+        if (!best || item.rank < best.rank || item.rank === best.rank &&
+            (item.current < best.current || item.current === best.current && item.url < best.url)) models.set(key, item);
+      }
     }
     if (!valid) {
       const details = [...reasons].map(([reason, count]) => reason + ': ' + count);
@@ -220,17 +266,18 @@ function main(repo, directory, publisher) {
       console.warn('Listino escluso: ' + issue);
       continue;
     }
+    totalValid += valid;
     console.log(path.relative(directory, filename) + ': ' + valid + ' offerte valide; ' + invalid + ' righe malformate.');
   }
-  if (!all.length) throw new Error('Nessuna offerta valida nei listini; catalogo precedente conservato.');
+  if (!models.size) throw new Error('Nessuna offerta valida nei listini; catalogo precedente conservato.');
   const discount = item => item.originalPrice ? 1 - item.current / cents(item.originalPrice, 'EUR') : 0;
-  const products = cheapestOffers(all).sort((a, b) => discount(b) - discount(a) || a.current - b.current);
+  const products = cheapestOffers([...models.values()]).sort((a, b) => discount(b) - discount(a) || a.current - b.current);
   const output = path.join(repo, 'catalogo');
   const staging = fs.mkdtempSync(path.join(path.dirname(output), '.catalogo-'));
   try {
     const pages = [];
     for (let offset = 0; offset < products.length; offset += 500) {
-      const entries = products.slice(offset, offset + 500).map(({ key, shipping, current, ...card }) => card);
+      const entries = products.slice(offset, offset + 500).map(({ key, shipping, current, modelKey, rank, ...card }) => card);
       const content = JSON.stringify(entries);
       const file = createHash('sha256').update(content).digest('hex') + '.json';
       fs.writeFileSync(path.join(staging, file), content);
@@ -249,6 +296,7 @@ function main(repo, directory, publisher) {
     fs.renameSync(path.join(staging, 'indice.json'), path.join(output, 'indice.json'));
     const active = new Set(pages.map(page => page.file));
     for (const file of fs.readdirSync(output)) if (/^[a-f0-9]{64}\.json$/.test(file) && !active.has(file)) fs.unlinkSync(path.join(output, file));
+    console.log(totalValid + ' varianti valide, ' + models.size + ' modelli selezionati prima del confronto tra venditori.');
     console.log(products.length + ' offerte pubblicabili in ' + pages.length + ' blocchi.');
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });

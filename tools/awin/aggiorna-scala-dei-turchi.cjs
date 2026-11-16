@@ -52,6 +52,9 @@ function chooseItalianListedFeed(name, links, matches, columns, urlIndex, log = 
   for (const row of italian.length ? italian : rows) {
     log(name + ' | feed ' + clean(row[id]) + ' | ' + clean(row[feedName]) + ' | lingua: ' + (clean(row[language]) || 'non indicata'));
   }
+  if (!italian.length && rows.length && rows.every(row => /^(?:english|german|spanish|french)$/i.test(tag(row)))) {
+    throw Object.assign(new Error('Nessun feed italiano nella lista Awin.'), { code: 'SCALA_AWIN_NO_ITALIAN' });
+  }
   throw new Error(italian.length
     ? 'Più feed italiani per questo advertiser: impossibile identificare un solo listino.'
     : 'Nessun feed italiano identificabile tra i link disponibili.');
@@ -90,6 +93,9 @@ async function downloadScript(revision, name, destination, category) {
   const saveEnd = '\n}\n\nfunction inspectPersonalAdvertisers';
   const start = script.indexOf(saveStart);
   const end = script.indexOf(saveEnd, start);
+  const loopStart = '    let completed = 0;\n    for (const name of targets) {';
+  if (script.split(loopStart).length !== 2) throw new Error('Contatore dei listini Awin non riconosciuto.');
+  script = script.replace(loopStart, '    let skippedNoItalian = 0;\n' + loopStart);
   const failure = '        reportFailure(name, stage, error);';
   if (start < 0 || end < 0 || script.split(failure).length !== 2) {
     throw new Error('Percorso di recupero dei feed Awin non riconosciuto.');
@@ -107,6 +113,11 @@ async function downloadScript(revision, name, destination, category) {
             completed++;
             continue;
           } catch (fallbackError) {
+            if (fallbackError.code === 'SCALA_AWIN_NO_ITALIAN') {
+              skippedNoItalian++;
+              console.warn(name + ' | saltato: Awin non offre un feed italiano.');
+              continue;
+            }
             reportFailure(name, stage, fallbackError);
             continue;
           }
@@ -114,7 +125,8 @@ async function downloadScript(revision, name, destination, category) {
 ` + failure);
   // The shared downloader can exit successfully with only part of the batch.
   fs.writeFileSync(destination, script.replace(summary, summary +
-    '\n    if (completed !== targets.length) process.exitCode = 1;'), { flag: 'wx' });
+    '\n    if (skippedNoItalian) console.warn("Advertiser saltati senza feed italiano: " + skippedNoItalian);' +
+    '\n    if (!completed || completed + skippedNoItalian !== targets.length) process.exitCode = 1;'), { flag: 'wx' });
   run(process.execPath, ['--check', destination]);
 }
 

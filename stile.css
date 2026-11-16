@@ -25,3 +25,8 @@ footer{font-size:.85rem;color:#40586a}
 .filtri-offerte{margin-top:.75rem;align-items:flex-end}
 #solo-sconti{margin:0;background:#fff;color:#103854}
 #solo-sconti[aria-pressed="true"]{background:#103854;color:#fff}
+
+.azioni-catalogo{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin-top:1rem}
+.azioni-catalogo button{margin:0}
+.torna-inizio{display:inline-flex;align-items:center;min-height:44px;padding:.55rem .7rem;border:1px solid #9eafba;border-radius:.6rem;background:#fff;color:#103854;font-weight:650;text-decoration:none}
+.torna-inizio:hover{background:#e8f0f5}

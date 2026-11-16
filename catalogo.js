@@ -3,6 +3,7 @@ const grid = document.getElementById('offerte');
 const statusNode = document.getElementById('stato');
 const more = document.getElementById('altre');
 const search = document.getElementById('cerca');
+const merchant = document.getElementById('venditore');
 const category = document.getElementById('categoria');
 const minPrice = document.getElementById('prezzo-minimo');
 const maxPrice = document.getElementById('prezzo-massimo');
@@ -93,6 +94,7 @@ async function load() {
   statusNode.textContent = 'Caricamento offerte…';
   const terms = normalize(search.value.trim()).split(/\s+/).filter(Boolean);
   const selected = category.value;
+  const seller = merchant.value;
   if (!minPrice.validity.valid || !maxPrice.validity.valid) {
     statusNode.textContent = 'Inserisci prezzi validi, da 0 € in su, con al massimo due decimali.';
     loading = undefined;
@@ -108,7 +110,7 @@ async function load() {
   const priceFilter = minPrice.value !== '' || maxPrice.value !== '';
   const discounted = discountOnly.getAttribute('aria-pressed') === 'true';
   const order = sortOrder.value;
-  const matches = item => (!selected || selected === categoryFamily(item.category)) &&
+  const matches = item => (!seller || item.merchant === seller) && (!selected || selected === categoryFamily(item.category)) &&
     price(item.price) >= lower && price(item.price) <= upper && (!discounted || onSale(item)) &&
     terms.every(term => normalize([item.name, item.brand, item.merchant].join(' ')).includes(term));
   try {
@@ -132,8 +134,8 @@ async function load() {
     }
     let reads = 0;
     while (!order && pending.length < 24 && offset < pages.length &&
-      (reads < 4 || discounted || priceFilter)) {
-      const size = discounted || priceFilter ? 4 : 1;
+      (reads < 4 || discounted || priceFilter || seller)) {
+      const size = discounted || priceFilter || seller ? 4 : 1;
       const next = await Promise.all(pages.slice(offset, offset + size).map(page => productBlock(page.file, signal)));
       if (revision !== current) return;
       offset += next.length;
@@ -168,7 +170,9 @@ function reset() {
   controller?.abort();
   controller = new AbortController();
   revision++;
-  pages = manifest.pages.filter(page => !category.value || page.categories.some(name => categoryFamily(name) === category.value));
+  pages = manifest.pages.filter(page =>
+    (!category.value || page.categories.some(name => categoryFamily(name) === category.value)) &&
+    (!merchant.value || !page.merchants || page.merchants.includes(merchant.value)));
   offset = 0;
   pending = [];
   grid.replaceChildren();
@@ -178,6 +182,9 @@ function start() {
   more.hidden = true;
   json('indice.json').then(data => {
     manifest = data;
+    merchant.replaceChildren(new Option('Tutti i venditori', ''));
+    for (const name of [...(data.merchants ?? [])].sort(collator.compare)) merchant.add(new Option(name, name));
+    merchant.disabled = !data.merchants?.length;
     category.replaceChildren(new Option('Tutte le categorie', ''));
     const families = [...new Set(data.categories.map(categoryFamily))];
     families.sort((a, b) => (a === 'Altri prodotti') - (b === 'Altri prodotti') || a.localeCompare(b, 'it'));
@@ -190,6 +197,7 @@ function start() {
   });
 }
 more.addEventListener('click', () => manifest?.count ? load() : start());
+merchant.addEventListener('change', () => { if (manifest) reset(); });
 category.addEventListener('change', () => { if (manifest) reset(); });
 sortOrder.addEventListener('change', () => { if (manifest) reset(); });
 discountOnly.addEventListener('click', () => {

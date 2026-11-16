@@ -3,18 +3,18 @@
 Vetrina Awin pubblicata da questo repository su GitHub Pages:
 https://davimarz.github.io/scaladeiturchi/
 
-Per aggiornare le offerte da PowerShell, avvia lo script con il tuo Publisher ID
-Awin e la cartella contenente il lotto completo di listini:
+Per aggiornare le offerte, salva i due file del Passo 2 nella cartella
+`C:\Users\admin\awin-playwright\scaladeiturchi\` e incolla in PowerShell
+il comando del file `2-Scarica-listini-e-aggiorna-catalogo.txt`.
 
-```powershell
-node tools/awin/aggiorna-scala-dei-turchi.cjs ID_PUBLISHER --da-listini "C:\Awin\Listini-Scala"
-```
+Scegli la sottocategoria: il programma cerca gli advertiser già attivi
+nella categoria selezionata e salva i feed in `LISTINI/<sottocategoria>/`.
+Per aggiornare altre categorie, rilancia il comando. Con `0` puoi pubblicare
+usando i listini già salvati, senza scaricarne altri.
 
-Sostituisci ID_PUBLISHER con il numero del tuo account. Per riutilizzare il
-download automatico di Archivio Scarpe, esegui una copia dello script nella
-stessa cartella locale dello scaricatore già configurato e ometti
-`--da-listini`. I feed originali restano in locale. Ogni pubblicazione rigenera
-il catalogo a partire dall'intero lotto fornito e invia solo il catalogo
-generato a questo repository. È necessario che Git sia autenticato sul computer.
+A ogni pubblicazione il catalogo è ricostruito da `LISTINI` e da tutte le sue
+sottocartelle. Su GitHub vanno solo le schede generate, non i listini originali.
+Servono Node.js, Playwright e il profilo Awin già configurato sul PC, oltre
+all’accesso Git al repository. Un download incompleto blocca la pubblicazione.
 
 Test locale dell’importatore: `node --test tests/awin-general.test.mjs`.

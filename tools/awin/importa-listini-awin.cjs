@@ -188,19 +188,24 @@ function main(repo, directory, publisher) {
   if (!repo || !directory || !/^\d+$/.test(publisher || '')) {
     throw new Error('Uso: node importa-listini-awin.cjs <repo> <LISTINI> <publisher-id>');
   }
-  const feeds = fs.readdirSync(directory, { withFileTypes: true })
-    .filter(entry => entry.isFile() && sourceExtension.test(entry.name)).map(entry => entry.name).sort();
+  const walk = (folder) => fs.readdirSync(folder, { withFileTypes: true }).flatMap(entry => {
+    if (entry.name.startsWith('.')) return [];
+    const filename = path.join(folder, entry.name);
+    if (entry.isDirectory()) return walk(filename);
+    return entry.isFile() && sourceExtension.test(entry.name) ? [filename] : [];
+  });
+  const feeds = walk(directory).sort();
   if (!feeds.length) throw new Error('Nessun listino Awin da importare.');
   const all = [];
   for (const filename of feeds) {
     let valid = 0;
     let invalid = 0;
-    for (const row of records(path.join(directory, filename), () => invalid++)) {
-      const item = offer(row, pick(row.merchant_name, row.advertiser_name, filename.replace(sourceExtension, '')), publisher);
+    for (const row of records(filename, () => invalid++)) {
+      const item = offer(row, pick(row.merchant_name, row.advertiser_name, path.basename(filename).replace(sourceExtension, '')), publisher);
       if (item) { valid++; all.push(item); }
     }
     if (!valid) throw new Error(filename + ': nessuna offerta valida; catalogo precedente conservato.');
-    console.log(filename + ': ' + valid + ' offerte valide; ' + invalid + ' righe malformate.');
+    console.log(path.relative(directory, filename) + ': ' + valid + ' offerte valide; ' + invalid + ' righe malformate.');
   }
   const discount = item => item.originalPrice ? 1 - item.current / cents(item.originalPrice, 'EUR') : 0;
   const products = cheapestOffers(all).sort((a, b) => discount(b) - discount(a) || a.current - b.current);

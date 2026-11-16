@@ -54,13 +54,92 @@ function element(tag, text, parent) {
   parent.append(node);
   return node;
 }
+// Crop only empty borders; leave the product's aspect ratio intact.
+function photoBounds(pixels, width, height) {
+  let left = width, right = -1, top = height, bottom = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      if (pixels[i + 3] < 20 || Math.min(pixels[i], pixels[i + 1], pixels[i + 2]) >= 248) continue;
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+  if (right < left || bottom < top || right - left < width * .08 || bottom - top < height * .08) return null;
+  if (Math.max(left / width, (width - 1 - right) / width, top / height, (height - 1 - bottom) / height) < .08) return null;
+  const margin = Math.ceil(Math.max(right - left, bottom - top) * .025);
+  const x = Math.max(0, left - margin), y = Math.max(0, top - margin);
+  return { x, y, width: Math.min(width, right + margin + 1) - x,
+    height: Math.min(height, bottom + margin + 1) - y };
+}
+
+function trimPhoto(image) {
+  const sourceWidth = image.naturalWidth, sourceHeight = image.naturalHeight;
+  if (!sourceWidth || !sourceHeight) return;
+  const scale = Math.min(1, 512 / Math.max(sourceWidth, sourceHeight));
+  const sample = document.createElement('canvas');
+  sample.width = Math.max(1, Math.round(sourceWidth * scale));
+  sample.height = Math.max(1, Math.round(sourceHeight * scale));
+  const context = sample.getContext('2d', { willReadFrequently: true });
+  if (!context) return;
+  context.drawImage(image, 0, 0, sample.width, sample.height);
+  const bounds = photoBounds(context.getImageData(0, 0, sample.width, sample.height).data, sample.width, sample.height);
+  if (!bounds) return;
+
+  const full = { x: bounds.x * sourceWidth / sample.width, y: bounds.y * sourceHeight / sample.height,
+    width: bounds.width * sourceWidth / sample.width, height: bounds.height * sourceHeight / sample.height };
+  const crop = document.createElement('canvas');
+  const outputScale = Math.min(1, 960 / Math.max(full.width, full.height));
+  crop.width = Math.max(1, Math.round(full.width * outputScale));
+  crop.height = Math.max(1, Math.round(full.height * outputScale));
+  const output = crop.getContext('2d');
+  if (!output) return;
+  output.drawImage(image, full.x, full.y, full.width, full.height, 0, 0, crop.width, crop.height);
+  crop.toBlob(blob => {
+    if (!blob || !image.isConnected) return;
+    const url = URL.createObjectURL(blob);
+    const original = image.src;
+    const cleanup = () => {
+      URL.revokeObjectURL(url);
+      image.removeEventListener('load', loaded);
+      image.removeEventListener('error', failed);
+    };
+    const loaded = () => cleanup();
+    const failed = () => { cleanup(); image.src = original; };
+    image.addEventListener('load', loaded);
+    image.addEventListener('error', failed);
+    image.src = url;
+  }, 'image/webp', .92);
+}
+
+function loadPhoto(image, source) {
+  let url;
+  try { url = new URL(source, document.baseURI); } catch { return; }
+  if (!['http:', 'https:'].includes(url.protocol)) return;
+  const original = () => {
+    image.removeEventListener('load', loaded);
+    image.removeAttribute('crossorigin');
+    if (image.isConnected) image.src = source;
+  };
+  const loaded = () => {
+    image.removeEventListener('error', original);
+    try { trimPhoto(image); } catch { /* Keep the original if pixels are inaccessible. */ }
+  };
+  image.crossOrigin = 'anonymous';
+  image.addEventListener('error', original, { once: true });
+  image.addEventListener('load', loaded, { once: true });
+  image.src = source;
+}
+
 function card(item, parent) {
   const article = element('article', '', parent);
   const image = element('img', '', article);
   image.alt = '';
   image.loading = 'lazy';
   image.decoding = 'async';
-  image.src = item.image;
+  loadPhoto(image, item.image);
   element('h2', item.name, article);
   element('p', item.merchant, article);
   const value = element('p', '', article);

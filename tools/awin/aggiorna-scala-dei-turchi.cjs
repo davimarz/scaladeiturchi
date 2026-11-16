@@ -344,9 +344,11 @@ async function chooseCategory() {
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--solo-verifica');
-  const [choice, ...extra] = args.filter(arg => arg !== '--solo-verifica');
-  if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria] [--solo-verifica]');
+  const skipEmpty = args.includes('--salta-listini-vuoti');
+  const [choice, ...extra] = args.filter(arg => !['--solo-verifica', '--salta-listini-vuoti'].includes(arg));
+  if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria] [--solo-verifica | --salta-listini-vuoti]');
   const category = choice === undefined ? await chooseCategory() : categoryChoice(choice);
+  if (skipEmpty && (category || dryRun)) throw new Error('Usa 0 --salta-listini-vuoti per importare i file già scaricati.');
   if (dryRun && !category) throw new Error('Per la verifica scegli una sottocategoria diversa da 0.');
   const publisher = '3150312';
   const local = path.join(__dirname, 'LISTINI');
@@ -377,7 +379,9 @@ async function main() {
     if (!fs.existsSync(local)) throw new Error('Cartella listini non trovata: ' + local);
     console.log('Aggiorno il catalogo con tutti i listini e le sottocartelle di ' + local);
     run('git', ['clone', '--depth', '1', '--single-branch', '--branch', 'main', repository, repo]);
-    run(process.execPath, [path.join(repo, 'tools', 'awin', 'importa-listini-awin.cjs'), repo, local, publisher]);
+    run(process.execPath, [path.join(repo, 'tools', 'awin', 'importa-listini-awin.cjs'), repo, local, publisher], {
+      env: { ...process.env, SCALA_AWIN_SALTA_LISTINI_VUOTI: skipEmpty ? '1' : '' }
+    });
     publish(repo);
     if (!await verifyOnline(repo)) {
       console.warn('GitHub aggiornato, ma il nuovo catalogo non è ancora verificabile su GitHub Pages.');

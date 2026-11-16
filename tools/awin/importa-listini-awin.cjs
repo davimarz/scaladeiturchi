@@ -143,16 +143,19 @@ function trackingLink(record, publisher) {
   return link.href;
 }
 
-function offer(record, merchant, publisher) {
+function offer(record, merchant, publisher, reject = () => null) {
   const name = pick(record.product_name, record.title);
   const availability = normalize(pick(record.availability, record.in_stock, record.stock_status));
-  if (/^(?:0|no|false|out[ _-]?of[ _-]?stock|unavailable|esaurito|non disponibile|pre[ _-]?order)$/.test(availability)) return null;
+  if (/^(?:0|no|false|out[ _-]?of[ _-]?stock|unavailable|esaurito|non disponibile|pre[ _-]?order)$/.test(availability)) return reject('non disponibili');
   const currency = pick(record.currency, record.currency_code);
   const current = [record.sale_price, record.search_price, record.store_price, record.price, record.display_price]
     .map(value => cents(value, currency)).find(value => value > 0);
   const image = https(pick(record.merchant_image_url, record.aw_image_url, record.image_link));
   const url = trackingLink(record, publisher);
-  if (!name || !current || !image || !url) return null;
+  if (!name || !current || !image || !url) {
+    return reject(...[!name && 'titolo mancante', !current && 'prezzo EUR non valido', !image && 'immagine HTTPS mancante',
+      !url && 'link affiliato non verificabile'].filter(Boolean));
+  }
   const rawGtin = pick(record.product_gtin, record.productgtin, record.ean, record.upc, record.gtin);
   const gtin = /^(?:\d{8}|\d{12,14})$/.test(rawGtin) && !/^0+$/.test(rawGtin) ? rawGtin.padStart(14, '0') : '';
   const originalPrice = [record.product_price_old, record.original_price, record.originalprice, record.previous_price,
@@ -200,13 +203,26 @@ function main(repo, directory, publisher) {
   for (const filename of feeds) {
     let valid = 0;
     let invalid = 0;
+    const reasons = new Map();
+    const reject = (...causes) => {
+      for (const cause of causes) reasons.set(cause, (reasons.get(cause) ?? 0) + 1);
+      return null;
+    };
     for (const row of records(filename, () => invalid++)) {
-      const item = offer(row, pick(row.merchant_name, row.advertiser_name, path.basename(filename).replace(sourceExtension, '')), publisher);
+      const item = offer(row, pick(row.merchant_name, row.advertiser_name, path.basename(filename).replace(sourceExtension, '')), publisher, reject);
       if (item) { valid++; all.push(item); }
     }
-    if (!valid) throw new Error(filename + ': nessuna offerta valida; catalogo precedente conservato.');
+    if (!valid) {
+      const details = [...reasons].map(([reason, count]) => reason + ': ' + count);
+      if (invalid) details.push('righe malformate: ' + invalid);
+      const issue = filename + ': nessuna offerta valida (' + (details.join('; ') || 'nessuna riga prodotto') + ')';
+      if (invalid || process.env.SCALA_AWIN_SALTA_LISTINI_VUOTI !== '1') throw new Error(issue + '; catalogo precedente conservato.');
+      console.warn('Listino escluso: ' + issue);
+      continue;
+    }
     console.log(path.relative(directory, filename) + ': ' + valid + ' offerte valide; ' + invalid + ' righe malformate.');
   }
+  if (!all.length) throw new Error('Nessuna offerta valida nei listini; catalogo precedente conservato.');
   const discount = item => item.originalPrice ? 1 - item.current / cents(item.originalPrice, 'EUR') : 0;
   const products = cheapestOffers(all).sort((a, b) => discount(b) - discount(a) || a.current - b.current);
   const output = path.join(repo, 'catalogo');

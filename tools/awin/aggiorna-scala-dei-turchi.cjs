@@ -113,36 +113,36 @@ async function verifyOnline(repo) {
 async function readCategoryAdvertisers(page, category) {
   const sector = page.getByText('Retail & Shopping', { exact: true }).filter({ visible: true });
   await sector.waitFor();
-  const branch = sector.locator('xpath=ancestor-or-self::li[./ul or ./*[contains(concat(" ", normalize-space(@class), " "), " hitarea ")]][1]');
-  const label = branch.getByText(category, { exact: true }).filter({ visible: true });
+  const sectorItem = sector.locator('xpath=ancestor-or-self::li[1]');
+  const anyLabel = page.getByText(category, { exact: true });
+  // Choose the closest branch containing the category, rather than a nested label wrapper.
+  const scopedBranch = sector.locator('xpath=ancestor-or-self::li').filter({ has: anyLabel }).last();
+  const label = scopedBranch.getByText(category, { exact: true }).filter({ visible: true });
   const filterItem = text => text.locator('xpath=ancestor-or-self::li[contains(concat(" ", normalize-space(@class), " "), " checkbox ")][1]');
   const isChecked = locator => locator.evaluate(node => node.classList.contains('selected') ||
     Boolean(node.querySelector(':scope > input:checked, :scope > [aria-checked="true"]')));
+  let manual = false;
   if (!await label.isVisible()) {
-    const toggle = branch.locator('xpath=./*[contains(concat(" ", normalize-space(@class), " "), " hitarea ") or @aria-expanded="false"]')
+    const toggles = sectorItem.locator(':scope > .hitarea, :scope > [aria-expanded="false"], :scope > :not(ul) > [aria-expanded="false"], :scope > summary, :scope > details:not([open]) > summary')
       .filter({ visible: true });
-    if (await toggle.count() === 1) {
-      await toggle.click();
-    } else {
-      const parent = filterItem(sector);
-      if (await parent.count() !== 1) throw new Error('Controllo Retail & Shopping non riconosciuto.');
-      if (await isChecked(parent)) throw new Error('Retail & Shopping è già selezionato per intero: apri il ramo e lascia selezionata solo ' + category + '.');
-      await sector.click();
-      if (await isChecked(parent)) {
-        await sector.click();
-        await parent.and(page.locator(':not(.selected)')).waitFor();
-        if (await isChecked(parent)) throw new Error('Impossibile deselezionare l’intero settore Retail & Shopping.');
-      }
+    if (await toggles.count() === 1) {
+      await toggles.click({ timeout: 3000 }).catch(() => {});
+      await label.waitFor({ timeout: 4000 }).catch(() => {});
+    }
+    if (!await label.isVisible()) {
+      manual = true;
+      console.log('Awin | Nel browser apri il ramo Retail & Shopping con la freccia. Per ora lascia la casella «' + category + '» deselezionata.');
+      await label.waitFor({ timeout: 90000 }).catch(() => {
+        throw new Error('Non è stato possibile individuare «' + category + '» nel ramo aperto. Nessun listino verrà scaricato.');
+      });
     }
   }
-  await label.waitFor({ timeout: 7000 }).catch(() => {
-    throw new Error('La sottocategoria «' + category + '» non è visibile dopo l’apertura di Retail & Shopping.');
-  });
   const item = filterItem(label);
+  if (await item.count() !== 1) throw new Error('Casella di categoria non riconosciuta: ' + category);
   const checked = () => isChecked(item);
   // Measure the fully loaded personal directory before touching the filter.
-  const stableRows = async (accept, message) => {
-    const until = Date.now() + 20000;
+  const stableRows = async (accept, message, timeout = 20000) => {
+    const until = Date.now() + timeout;
     let previous, since;
     while (Date.now() < until) {
       const snapshot = await page.evaluate(inspectPersonalAdvertisers, false);
@@ -175,12 +175,13 @@ async function readCategoryAdvertisers(page, category) {
   }
   const before = await stableRows(async () => !await checked(), 'Elenco iniziale degli advertiser non verificabile.');
   const beforeNames = new Set(before.names);
-  await label.click();
+  if (manual) console.log('Awin | Ora seleziona solo «' + category + '» nel browser. Attendo la tabella filtrata.');
+  else await label.click();
   const filtered = await stableRows(async after => await checked() && !await otherCategories() && (
     Number.isSafeInteger(before.total) && Number.isSafeInteger(after.total)
       ? after.total > 0 && after.total < before.total
       : after.names.length < before.names.length && after.names.every(name => beforeNames.has(name))
-  ), 'Awin non ha confermato un elenco più ristretto per «' + category + '». Nessun listino verrà scaricato.');
+  ), 'Awin non ha confermato un elenco più ristretto per «' + category + '». Nessun listino verrà scaricato.', manual ? 90000 : 20000);
   if (filtered.total === null) {
     const next = page.getByText(/^(?:pagina )?successiv[ao](?:\s*[›»])?$/i).filter({ visible: true });
     if (await next.count()) throw new Error('Awin non indica il totale della categoria: la paginazione non è verificabile.');

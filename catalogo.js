@@ -4,6 +4,7 @@ const statusNode = document.getElementById('stato');
 const more = document.getElementById('altre');
 const search = document.getElementById('cerca');
 const category = document.getElementById('categoria');
+const minPrice = document.getElementById('prezzo-minimo');
 const maxPrice = document.getElementById('prezzo-massimo');
 const sortOrder = document.getElementById('ordinamento');
 const discountOnly = document.getElementById('solo-sconti');
@@ -92,11 +93,23 @@ async function load() {
   statusNode.textContent = 'Caricamento offerte…';
   const terms = normalize(search.value.trim()).split(/\s+/).filter(Boolean);
   const selected = category.value;
-  const budget = maxPrice.value === '' || !maxPrice.validity.valid ? Infinity : maxPrice.valueAsNumber;
+  if (!minPrice.validity.valid || !maxPrice.validity.valid) {
+    statusNode.textContent = 'Inserisci prezzi validi, da 0 € in su, con al massimo due decimali.';
+    loading = undefined;
+    return;
+  }
+  const lower = minPrice.value === '' ? 0 : minPrice.valueAsNumber;
+  const upper = maxPrice.value === '' ? Infinity : maxPrice.valueAsNumber;
+  if (lower > upper) {
+    statusNode.textContent = 'Il prezzo minimo deve essere minore o uguale al prezzo massimo.';
+    loading = undefined;
+    return;
+  }
+  const priceFilter = minPrice.value !== '' || maxPrice.value !== '';
   const discounted = discountOnly.getAttribute('aria-pressed') === 'true';
   const order = sortOrder.value;
   const matches = item => (!selected || selected === categoryFamily(item.category)) &&
-    price(item.price) <= budget && (!discounted || onSale(item)) &&
+    price(item.price) >= lower && price(item.price) <= upper && (!discounted || onSale(item)) &&
     terms.every(term => normalize([item.name, item.brand, item.merchant].join(' ')).includes(term));
   try {
     // An explicit sort must see all results before showing the first page.
@@ -119,8 +132,8 @@ async function load() {
     }
     let reads = 0;
     while (!order && pending.length < 24 && offset < pages.length &&
-      (reads < 4 || discounted || budget !== Infinity)) {
-      const size = discounted || budget !== Infinity ? 4 : 1;
+      (reads < 4 || discounted || priceFilter)) {
+      const size = discounted || priceFilter ? 4 : 1;
       const next = await Promise.all(pages.slice(offset, offset + size).map(page => productBlock(page.file, signal)));
       if (revision !== current) return;
       offset += next.length;
@@ -183,7 +196,7 @@ discountOnly.addEventListener('click', () => {
   discountOnly.setAttribute('aria-pressed', String(discountOnly.getAttribute('aria-pressed') !== 'true'));
   if (manifest) reset();
 });
-for (const input of [search, maxPrice]) input.addEventListener('input', () => {
+for (const input of [search, minPrice, maxPrice]) input.addEventListener('input', () => {
   clearTimeout(timer);
   if (manifest) timer = setTimeout(reset, 200);
 });

@@ -46,7 +46,7 @@ async function downloadScript(revision, name, destination, category) {
   const requestHook = 'const requested = process.argv.slice(3).map(name => name.trim().toLowerCase());';
   if (script.split(requestHook).length !== 2) throw new Error('Punto di selezione dei listini Awin non riconosciuto.');
   script = script.replace(hook, () => 'let selection; try { selection = await (' + readCategoryAdvertisers.toString() +
-    ')(page, ' + JSON.stringify(category) + '); } catch (error) { console.error("Awin | " + error.message); process.exitCode = 1; return; }' +
+    ')(page, ' + JSON.stringify(category) + ', ' + JSON.stringify(categories) + '); } catch (error) { console.error("Awin | " + error.message); process.exitCode = 1; return; }' +
     ' const active = selection.joined;' +
     ' console.log("Awin | Iscritto / " + ' + JSON.stringify(category) + ' + ": " + (selection.targets.join(", ") || "nessun advertiser"));' +
     ' if (process.env.SCALA_AWIN_SOLO_VERIFICA === "1") return;' +
@@ -117,7 +117,7 @@ async function verifyOnline(repo) {
 }
 
 // Filter inside Iscritto; never leave the joined advertiser view.
-async function readCategoryAdvertisers(page, category) {
+async function readCategoryAdvertisers(page, category, categoryNames) {
   const snapshot = () => page.evaluate(inspectPersonalAdvertisers, false);
   async function stableRows(accept, message, timeout = 25000) {
     const until = Date.now() + timeout;
@@ -134,47 +134,57 @@ async function readCategoryAdvertisers(page, category) {
   }
   await page.getByText(/^Advertiser personali(?:\s*\(\s*\d+\s*\))?$/i)
     .filter({ visible: true }).first().waitFor({ timeout: 20000 });
-  const sector = page.getByText(/^Retail\s*&\s*Shopping(?:\s*\([\d.]+\))?$/i).filter({ visible: true });
-  if (!(await sector.waitFor({ timeout: 15000 }).then(() => true, () => false))) {
-    throw new Error('Filtro Settore → Retail & Shopping non trovato nella scheda «Iscritto».');
-  }
-  // Scope to the actual tree item; a nearest <li> can be a wrapper for the caption.
-  const branch = sector.locator('xpath=ancestor-or-self::*[(self::li or @role="treeitem") and (./ul or ./*[@role="group" or @aria-expanded or contains(concat(" ",normalize-space(@class)," ")," hitarea ") or self::details])][1]');
-  const label = branch.getByText(new RegExp('^' + category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+  const sector = page.getByText('Settore', { exact: true }).filter({ visible: true });
+  const retail = page.getByText(/^Retail\s*&\s*Shopping(?:\s*\([\d.]+\))?$/i).filter({ visible: true });
+  const label = page.getByText(new RegExp('^' + category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
     '(?:\\s*\\([\\d.]+\\))?$', 'i')).filter({ visible: true });
-  const toggle = branch.locator(':scope > .hitarea, :scope > [aria-expanded="false"], :scope > :not(ul):not([role="group"]) > [aria-expanded="false"], :scope > details:not([open]) > summary')
-    .filter({ visible: true });
-  if (!await label.isVisible() && await toggle.count() === 1) {
-    await toggle.click({ timeout: 3500 }).catch(() => {});
-    await label.waitFor({ timeout: 4000 }).catch(() => {});
+  if (!await label.isVisible() && !await retail.isVisible() && await sector.count() === 1) {
+    await sector.click({ timeout: 3500 }).catch(() => {});
   }
   if (!await label.isVisible()) {
-    console.log('Awin | Nella scheda «Iscritto», apri Settore → Retail & Shopping con la freccia, senza spuntare la casella principale.');
+    console.log('Awin | Nella scheda «Iscritto», espandi il filtro Settore. Lascia deselezionate le caselle.');
     await label.waitFor({ timeout: 90000 }).catch(() => {
-      throw new Error('Sottocategoria «' + category + '» non trovata nel ramo. Nessun listino scaricato.');
+      throw new Error('Sottocategoria «' + category + '» non trovata in «Iscritto». Nessun listino scaricato.');
     });
   }
-  const item = label.locator('xpath=ancestor-or-self::*[self::li or @role="treeitem"][1]');
   const selection = async () => {
-    if (await branch.count() !== 1 || await item.count() !== 1) return { valid: false };
-    return branch.evaluate((root, wanted) => {
-      const rowSelector = 'li, [role="treeitem"]';
-      const clean = value => (value ?? '').replace(/\s+/g, ' ').trim().replace(/\s*\([\d.]+\)$/, '').toLowerCase();
-      const caption = node => [...node.childNodes].map(child => {
-        if (child.nodeType === Node.TEXT_NODE) return child.textContent;
-        if (child.nodeType !== Node.ELEMENT_NODE || child.matches('ul, ol, [role="group"], ' + rowSelector)) return '';
-        return caption(child);
-      }).join(' ');
-      const matching = [...root.querySelectorAll(rowSelector)].filter(node => clean(caption(node)) === clean(wanted));
-      const tree = root.parentElement;
-      if (!tree || matching.length !== 1) return { valid: false };
-      const target = matching[0];
-      const checked = node => !node.matches('.indeterminate, [aria-checked="mixed"]') &&
-        (node.matches('.selected, [aria-checked="true"]') ||
-          [...node.querySelectorAll('input:checked, [aria-checked="true"]')].some(control =>
-            control.closest(rowSelector) === node && !control.indeterminate));
-      return { valid: true, selected: checked(target), other: [...tree.querySelectorAll(rowSelector)].some(node => node !== target && checked(node)) };
-    }, category);
+    if (await label.count() !== 1 || await retail.count() !== 1) return { valid: false };
+    return label.evaluate((element, allowed) => {
+      const normalize = value => (value ?? '').replace(/\s+/g, ' ').trim().replace(/\s*\([\d.]+\)$/, '').toLowerCase();
+      const names = new Set(allowed.map(normalize));
+      const retailName = normalize('Retail & Shopping');
+      const role = '[role="checkbox"], input[type="checkbox"]';
+      const row = 'li.checkbox, [role="treeitem"]';
+      const controlFor = text => {
+        const native = text.closest('label')?.control;
+        if (native?.matches(role)) return native;
+        const direct = text.closest(role);
+        if (direct) return direct;
+        for (let box = text; box && box !== document.body; box = box.parentElement) {
+          const controls = box.querySelectorAll(role);
+          if (controls.length > 1) break;
+          if (controls.length === 1) return controls[0];
+          if (box.matches(row)) return box;
+        }
+        return null;
+      };
+      const checked = node => node && !node.indeterminate && !node.matches('[aria-checked="mixed"], .indeterminate') &&
+        (node.checked === true || node.matches('[aria-checked="true"], .selected'));
+      const own = controlFor(element);
+      if (!own) return { valid: false };
+      const byCaption = new Map();
+      for (const node of document.body.querySelectorAll('label, span, a, div, li, [role="checkbox"]')) {
+        const title = normalize(node.textContent);
+        if (!names.has(title) || [...node.children].some(child => normalize(child.textContent) === title)) continue;
+        const control = controlFor(node);
+        if (!control) continue;
+        if (!byCaption.has(title)) byCaption.set(title, new Set());
+        byCaption.get(title).add(control);
+      }
+      if (byCaption.get(retailName)?.size !== 1) return { valid: false };
+      const other = [...byCaption.values()].some(controls => [...controls].some(node => node !== own && checked(node)));
+      return { valid: true, selected: checked(own), other };
+    }, [...categoryNames, 'Retail & Shopping', 'Finance & Insurance', 'Telecoms & Services', 'Travel']);
   };
   const initial = await selection();
   if (!initial.valid || initial.other) throw new Error('I controlli di categoria non sono verificabili o ci sono altri settori selezionati.');

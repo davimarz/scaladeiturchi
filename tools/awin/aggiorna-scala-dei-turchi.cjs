@@ -141,8 +141,17 @@ async function readCategoryAdvertisers(page, category, categoryNames) {
   if (!await label.isVisible() && !await retail.isVisible() && await sector.count() === 1) {
     await sector.click({ timeout: 3500 }).catch(() => {});
   }
+  // On the signed-in profile the sector is open, but the retail branch can be collapsed.
+  if (!await label.isVisible() && await retail.count() === 1) {
+    const branch = retail.locator('xpath=ancestor-or-self::li[./ul or ./*[contains(concat(" ",normalize-space(@class)," ")," hitarea ")]][1]');
+    const expand = branch.locator(':scope > .hitarea, :scope > [aria-expanded="false"]')
+      .filter({ visible: true });
+    if (await expand.count() === 1) await expand.click({ timeout: 3000 }).catch(() => {});
+    else await retail.click({ timeout: 3000 }).catch(() => {});
+    await label.waitFor({ timeout: 5000 }).catch(() => {});
+  }
   if (!await label.isVisible()) {
-    console.log('Awin | Nella scheda «Iscritto», espandi il filtro Settore. Lascia deselezionate le caselle.');
+    console.log('Awin | Nella scheda «Iscritto», apri il ramo «Retail & Shopping» dentro «Settore». Lascia deselezionata la sottocategoria.');
     await label.waitFor({ timeout: 90000 }).catch(() => {
       throw new Error('Sottocategoria «' + category + '» non trovata in «Iscritto». Nessun listino scaricato.');
     });
@@ -182,11 +191,19 @@ async function readCategoryAdvertisers(page, category, categoryNames) {
         byCaption.get(title).add(control);
       }
       if (byCaption.get(retailName)?.size !== 1) return { valid: false };
+      const broader = [...(byCaption.get(retailName) ?? [])].some(checked);
       const other = [...byCaption.values()].some(controls => [...controls].some(node => node !== own && checked(node)));
-      return { valid: true, selected: checked(own), other };
+      return { valid: true, selected: checked(own), other, broader };
     }, [...categoryNames, 'Retail & Shopping', 'Finance & Insurance', 'Telecoms & Services', 'Travel']);
   };
-  const initial = await selection();
+  let initial = await selection();
+  if (initial.valid && initial.broader) {
+    await retail.click();
+    if (!await label.isVisible()) {
+      throw new Error('Awin ha richiuso il ramo deselezionando Retail & Shopping. Nessun listino scaricato.');
+    }
+    initial = await selection();
+  }
   if (!initial.valid || initial.other) throw new Error('I controlli di categoria non sono verificabili o ci sono altri settori selezionati.');
   if (initial.selected) await label.click();
   const unfiltered = await stableRows(async () => {

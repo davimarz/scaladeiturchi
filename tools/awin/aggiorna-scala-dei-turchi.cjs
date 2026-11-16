@@ -52,6 +52,33 @@ async function downloadScript(revision, name, destination, category) {
     ' if (process.env.SCALA_AWIN_SOLO_VERIFICA === "1") return;' +
     ' if (!selection.targets.length) { console.error("Nessun listino da scaricare."); process.exitCode = 1; return; }')
     .replace(requestHook, 'const requested = selection.targets.map(name => name.trim().toLowerCase());');
+  // Reuse the pinned helper's validation and saving for the official-list fallback.
+  const saveStart = "  setStage('Verifica del nome del file');";
+  const saveEnd = '\n}\n\nfunction inspectPersonalAdvertisers';
+  const start = script.indexOf(saveStart);
+  const end = script.indexOf(saveEnd, start);
+  const failure = '        reportFailure(name, stage, error);';
+  if (start < 0 || end < 0 || script.split(failure).length !== 2) {
+    throw new Error('Percorso di recupero dei feed Awin non riconosciuto.');
+  }
+  script = script.slice(0, start) + '  await saveScalaExport(exportFile, name, setStage);\n}\n\n' +
+    'async function saveScalaExport(exportFile, name, setStage) {\n' + script.slice(start);
+  script = script.replace(failure, () => `        if (stage === 'Attesa della riga del feed') {
+          try {
+            await open(page, '/datafeed/step-one');
+            setStage('Recupero tramite Scarica lista Feed');
+            console.log(name + ' | cerco un listino attivo nella lista ufficiale Awin');
+            const listed = await findListedFeed(page, await getFeedListUrl(page), name);
+            const file = await fetchGeneratedExport(page, name, enhancedUiExportUrl(listed) || listed);
+            await saveScalaExport(file, name, setStage);
+            completed++;
+            continue;
+          } catch (fallbackError) {
+            reportFailure(name, stage, fallbackError);
+            continue;
+          }
+        }
+` + failure);
   // The shared downloader can exit successfully with only part of the batch.
   fs.writeFileSync(destination, script.replace(summary, summary +
     '\n    if (completed !== targets.length) process.exitCode = 1;'), { flag: 'wx' });

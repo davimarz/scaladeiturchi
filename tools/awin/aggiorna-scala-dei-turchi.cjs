@@ -140,55 +140,80 @@ async function readCategoryAdvertisers(page, category) {
   });
   const item = filterItem(label);
   const checked = () => isChecked(item);
-  if (!await checked()) {
-    const before = await page.evaluate(inspectPersonalAdvertisers, false);
-    await label.click();
-    const until = Date.now() + 12000;
-    let changed = false;
+  // Measure the fully loaded personal directory before touching the filter.
+  const stableRows = async (accept, message) => {
+    const until = Date.now() + 20000;
+    let previous, since;
     while (Date.now() < until) {
-      const after = await page.evaluate(inspectPersonalAdvertisers, false);
-      if (after.names?.length && JSON.stringify(after) !== JSON.stringify(before) && await checked()) {
-        changed = true;
-        break;
+      const snapshot = await page.evaluate(inspectPersonalAdvertisers, false);
+      const signature = JSON.stringify(snapshot);
+      if (!snapshot.names?.length || !await accept(snapshot)) {
+        previous = undefined;
+      } else if (signature !== previous) {
+        previous = signature;
+        since = Date.now();
+      } else if (Date.now() - since >= 1200) {
+        return snapshot;
       }
       await page.waitForTimeout(250);
     }
-    if (!changed) throw new Error('Risultati della categoria non verificabili o nessun advertiser attivo: ' + category);
+    throw new Error(message);
+  };
+  const otherCategories = async () => item.evaluate(target => {
+    const sector = target.closest('ul')?.closest('li');
+    const tree = sector?.closest('ul');
+    if (!tree) throw new Error('Albero delle categorie Awin non verificabile.');
+    return [...tree.querySelectorAll('li.checkbox')].some(node =>
+      node !== target && (node.classList.contains('selected') ||
+        node.querySelector(':scope > input:checked, :scope > [aria-checked="true"]')));
+  });
+  if (await otherCategories()) throw new Error('Deseleziona gli altri settori o sottocategorie prima di scaricare «' + category + '».');
+  // An already selected category is not proof that the table reflects it.
+  if (await checked()) {
+    await label.click();
+    await stableRows(async () => !await checked(), 'Impossibile azzerare il filtro «' + category + '».');
   }
+  const before = await stableRows(async () => !await checked(), 'Elenco iniziale degli advertiser non verificabile.');
+  const beforeNames = new Set(before.names);
+  await label.click();
+  const filtered = await stableRows(async after => await checked() && !await otherCategories() && (
+    Number.isSafeInteger(before.total) && Number.isSafeInteger(after.total)
+      ? after.total > 0 && after.total < before.total
+      : after.names.length < before.names.length && after.names.every(name => beforeNames.has(name))
+  ), 'Awin non ha confermato un elenco più ristretto per «' + category + '». Nessun listino verrà scaricato.');
+  if (filtered.total === null) {
+    const next = page.getByText(/^(?:pagina )?successiv[ao](?:\s*[›»])?$/i).filter({ visible: true });
+    if (await next.count()) throw new Error('Awin non indica il totale della categoria: la paginazione non è verificabile.');
+    console.log('Awin | ' + category + ' | ' + filtered.names.length + ' advertiser dopo il filtro');
+    return filtered.names;
+  }
+  console.log('Awin | ' + category + ' | ' + filtered.total + ' advertiser dopo il filtro');
   const names = new Set();
   const visited = new Set();
-  let expected;
+  const expected = filtered.total;
+  let current = filtered;
   for (;;) {
     if (!await checked()) throw new Error('Awin ha perso il filtro: ' + category);
-    const extra = await item.evaluate(target => [...target.closest('ul').querySelectorAll('li.checkbox')]
-      .some(node => node !== target && !node.contains(target) && (node.classList.contains('selected') ||
-        node.querySelector(':scope > input:checked, :scope > [aria-checked="true"]'))));
-    if (extra) throw new Error('Sono selezionate più sottocategorie: ' + category);
-    const current = await readAdvertiserPage(page);
+    if (await otherCategories()) throw new Error('Sono selezionate più categorie: ' + category);
     if (!current.names.length || !await checked()) throw new Error('Elenco filtrato non verificabile: ' + category);
-    expected ??= current.total;
     if (current.total !== expected) throw new Error('Il numero di advertiser filtrati è cambiato.');
     const signature = JSON.stringify(current.names);
     if (visited.has(signature)) throw new Error('Awin ha ripetuto una pagina.');
     visited.add(signature);
     for (const name of current.names) names.add(name);
+    if (names.size === expected) return [...names];
+    if (names.size > expected) throw new Error('Awin mostra più advertiser del totale filtrato.');
     const nextLabel = /^(?:pagina )?successiv[ao](?:\s*[›»])?$/i;
     const next = page.getByRole('link', { name: nextLabel }).or(page.getByRole('button', { name: nextLabel }))
       .or(page.getByText(nextLabel)).filter({ visible: true });
-    if (expected !== null && names.size === expected) return [...names];
     if (await next.count() !== 1 || !await next.isEnabled()) {
-      if (expected === null && await next.count() === 0) return [...names];
       throw new Error('Paginazione filtrata non verificabile.');
     }
     await next.click();
-    const until = Date.now() + 12000;
-    for (;;) {
-      const after = await page.evaluate(inspectPersonalAdvertisers, false);
-      if (!await checked()) throw new Error('Il filtro è stato perso passando alla pagina successiva.');
-      if (after.names?.length && JSON.stringify(after.names) !== signature) break;
-      if (Date.now() >= until) throw new Error('La pagina successiva non si è caricata.');
-      await page.waitForTimeout(250);
-    }
+    current = await stableRows(async after => {
+      if (!await checked() || await otherCategories()) throw new Error('Il filtro è stato perso passando alla pagina successiva.');
+      return after.total === expected && JSON.stringify(after.names) !== signature;
+    }, 'La pagina successiva filtrata non si è caricata.');
   }
 }
 

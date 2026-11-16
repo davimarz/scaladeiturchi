@@ -234,9 +234,15 @@ function main(repo, directory, publisher) {
       const content = JSON.stringify(entries);
       const file = createHash('sha256').update(content).digest('hex') + '.json';
       fs.writeFileSync(path.join(staging, file), content);
-      pages.push({ file, categories: [...new Set(entries.map(item => item.category))].sort() });
+      pages.push({
+        file, categories: [...new Set(entries.map(item => item.category))].sort(),
+        merchants: [...new Set(entries.map(item => item.merchant).filter(Boolean))].sort()
+      });
     }
-    const manifest = { count: products.length, pages, categories: [...new Set(products.map(item => item.category))].sort() };
+    const manifest = {
+      count: products.length, pages, categories: [...new Set(products.map(item => item.category))].sort(),
+      merchants: [...new Set(pages.flatMap(page => page.merchants))].sort()
+    };
     fs.writeFileSync(path.join(staging, 'indice.json'), JSON.stringify(manifest) + '\n');
     fs.mkdirSync(output, { recursive: true });
     for (const { file } of pages) fs.renameSync(path.join(staging, file), path.join(output, file));

@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="Offerte dei negozi partner Awin selezionate da Scala dei Turchi.">
   <title>Scala dei Turchi | Offerte Awin</title>
-  <link rel="stylesheet" href="./stile.css?v=2">
+  <link rel="stylesheet" href="./stile.css?v=3">
   <script src="./catalogo.js?v=4" defer></script>
 </head>
 <body>
-  <header><span>SCALA DEI TURCHI</span><h1>Offerte da scoprire, con un tocco di Sicilia.</h1><p>Confronta le offerte dei negozi partner.</p></header>
+  <header id="inizio" tabindex="-1"><span>SCALA DEI TURCHI</span><h1>Offerte da scoprire, con un tocco di Sicilia.</h1><p>Confronta le offerte dei negozi partner.</p></header>
   <main>
     <div class="filtri">
       <label>Cerca prodotto o marca <input id="cerca" type="search" maxlength="120"></label>
@@ -27,7 +27,10 @@
     </div>
     <p id="stato" role="status">Caricamento del catalogo…</p>
     <div id="offerte" class="offerte"></div>
-    <button id="altre" type="button" hidden>Mostra altre offerte</button>
+    <div class="azioni-catalogo">
+      <button id="altre" type="button" hidden>Mostra altre offerte</button>
+      <a class="torna-inizio" href="#inizio">Torna all’inizio</a>
+    </div>
   </main>
   <footer>I link sono affiliati: Scala dei Turchi può ricevere una commissione. Prezzi e disponibilità vanno confermati sul sito del negozio. <a href="./privacy.html">Privacy</a> · <a href="./cookie.html">Cookie</a></footer>
 </body>

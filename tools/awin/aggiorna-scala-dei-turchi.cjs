@@ -60,6 +60,38 @@ function chooseItalianListedFeed(name, links, matches, columns, urlIndex, log = 
     : 'Nessun feed italiano identificabile tra i link disponibili.');
 }
 
+async function reuseRecentFeed(root, destination, basename, supported, now = Date.now()) {
+  const files = await fs.readdir(root, { withFileTypes: true }).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const cutOff = now - 24 * 60 * 60 * 1000;
+  const candidates = [];
+  for (const folder of [root, ...files.filter(entry => entry.isDirectory()).map(entry => path.join(root, entry.name))]) {
+    const entries = folder === root ? files : await fs.readdir(folder, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !supported.test(entry.name) ||
+          entry.name.replace(supported, '').toLowerCase() !== basename.toLowerCase()) continue;
+      const source = path.join(folder, entry.name);
+      const info = await fs.stat(source);
+      if (info.size > 0 && info.mtimeMs >= cutOff && info.mtimeMs <= now) candidates.push({ source, info, name: entry.name });
+    }
+  }
+  candidates.sort((a, b) => b.info.mtimeMs - a.info.mtimeMs);
+  const latest = candidates[0];
+  if (!latest) return null;
+  await fs.mkdir(destination, { recursive: true });
+  const target = path.join(destination, latest.name);
+  try {
+    await fs.copyFile(latest.source, target);
+    await fs.utimes(target, latest.info.atime, latest.info.mtime);
+    return latest.source;
+  } catch (error) {
+    await fs.rm(target, { force: true });
+    throw error;
+  }
+}
+
 async function downloadScript(revision, name, destination, category) {
   const response = await fetch(rawBase + revision + '/tools/awin/' + name, {
     redirect: 'error',
@@ -95,7 +127,19 @@ async function downloadScript(revision, name, destination, category) {
   const end = script.indexOf(saveEnd, start);
   const loopStart = '    let completed = 0;\n    for (const name of targets) {';
   if (script.split(loopStart).length !== 2) throw new Error('Contatore dei listini Awin non riconosciuto.');
-  script = script.replace(loopStart, '    let skippedNoItalian = 0;\n' + loopStart);
+  script = script.replace(loopStart, () => '    let skippedNoItalian = 0;\n' + loopStart + `
+      try {
+        const reused = await (` + reuseRecentFeed.toString() + `)(path.join(__dirname, 'LISTINI'), output,
+          advertiserFilename(name), ` + feedExtension + `);
+        if (reused) {
+          console.log(name + ' | listino già disponibile nelle ultime 24 ore: riutilizzato | ' + reused);
+          completed++;
+          continue;
+        }
+      } catch {
+        console.warn(name + ' | riutilizzo non riuscito, provo a scaricare da Awin.');
+      }
+`);
   const failure = '        reportFailure(name, stage, error);';
   if (start < 0 || end < 0 || script.split(failure).length !== 2) {
     throw new Error('Percorso di recupero dei feed Awin non riconosciuto.');
@@ -139,7 +183,10 @@ function keepLocalFeeds(staging, local) {
   for (const { name } of feeds) {
     const temporary = path.join(local, '.' + randomUUID() + '.part');
     try {
-      fs.copyFileSync(path.join(staging, name), temporary, fs.constants.COPYFILE_EXCL);
+      const source = path.join(staging, name);
+      const info = fs.statSync(source);
+      fs.copyFileSync(source, temporary, fs.constants.COPYFILE_EXCL);
+      fs.utimesSync(temporary, info.atime, info.mtime);
       fs.renameSync(temporary, path.join(local, name));
     } finally {
       fs.rmSync(temporary, { force: true });

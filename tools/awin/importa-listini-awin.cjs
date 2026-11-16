@@ -226,6 +226,20 @@ function cheapestOffers(offers) {
   });
 }
 
+function feedDigest(filename, buffer) {
+  const hash = createHash('sha256');
+  const file = fs.openSync(filename, 'r');
+  try {
+    let bytes;
+    while ((bytes = fs.readSync(file, buffer, 0, buffer.length, null)) > 0) {
+      hash.update(buffer.subarray(0, bytes));
+    }
+    return hash.digest('hex');
+  } finally {
+    fs.closeSync(file);
+  }
+}
+
 function main(repo, directory, publisher) {
   if (!repo || !directory || !/^\d+$/.test(publisher || '')) {
     throw new Error('Uso: node importa-listini-awin.cjs <repo> <LISTINI> <publisher-id>');
@@ -240,7 +254,16 @@ function main(repo, directory, publisher) {
   if (!feeds.length) throw new Error('Nessun listino Awin da importare.');
   let totalValid = 0;
   const models = new Map();
+  const seenFeeds = new Map();
+  const hashBuffer = Buffer.allocUnsafe(256 * 1024);
   for (const filename of feeds) {
+    const digest = feedDigest(filename, hashBuffer);
+    if (seenFeeds.has(digest)) {
+      console.log(path.relative(directory, filename) + ': copia identica di ' +
+        path.relative(directory, seenFeeds.get(digest)) + '; salto la seconda importazione.');
+      continue;
+    }
+    seenFeeds.set(digest, filename);
     let valid = 0;
     let invalid = 0;
     const reasons = new Map();
@@ -255,7 +278,10 @@ function main(repo, directory, publisher) {
         const key = item.modelKey ?? JSON.stringify([item.merchant, item.key]);
         const best = models.get(key);
         if (!best || item.rank < best.rank || item.rank === best.rank &&
-            (item.current < best.current || item.current === best.current && item.url < best.url)) models.set(key, item);
+            (item.current < best.current || item.current === best.current && item.url < best.url)) {
+          // Retained CSV fields must not keep the entire decompressed string in memory.
+          models.set(key, structuredClone(item));
+        }
       }
     }
     if (!valid) {

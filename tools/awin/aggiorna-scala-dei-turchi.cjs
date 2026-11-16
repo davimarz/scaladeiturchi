@@ -78,7 +78,7 @@ async function downloadScript(revision, name, destination, category) {
     ' const active = selection.joined;' +
     ' console.log("Awin | Iscritto / " + ' + JSON.stringify(category) + ' + ": " + (selection.targets.join(", ") || "nessun advertiser"));' +
     ' if (process.env.SCALA_AWIN_SOLO_VERIFICA === "1") return;' +
-    ' if (!selection.targets.length) { console.error("Nessun listino da scaricare."); process.exitCode = 1; return; }')
+    ' if (!selection.targets.length) { console.log("Nessun advertiser iscritto nella sottocategoria."); return; }')
     .replace(requestHook, 'const requested = selection.targets.map(name => name.trim().toLowerCase());');
   const listedStart = '    if (links.length !== 1) {';
   const listedEnd = '    return links[0];';
@@ -126,7 +126,7 @@ async function downloadScript(revision, name, destination, category) {
   // The shared downloader can exit successfully with only part of the batch.
   fs.writeFileSync(destination, script.replace(summary, summary +
     '\n    if (skippedNoItalian) console.warn("Advertiser saltati senza feed italiano: " + skippedNoItalian);' +
-    '\n    if (!completed || completed + skippedNoItalian !== targets.length) process.exitCode = 1;'), { flag: 'wx' });
+    '\n    if (completed + skippedNoItalian !== targets.length) process.exitCode = 1;'), { flag: 'wx' });
   run(process.execPath, ['--check', destination]);
 }
 
@@ -190,7 +190,9 @@ async function verifyOnline(repo) {
 
 // Filter inside Iscritto; never leave the joined advertiser view.
 async function readCategoryAdvertisers(page, category, categoryNames) {
-  const snapshot = () => page.evaluate(inspectPersonalAdvertisers, false);
+  const emptyHeading = page.getByText(/^Advertiser personali\s*\(\s*0\s*\)$/i).filter({ visible: true });
+  const snapshot = async () => await emptyHeading.count() === 1
+    ? { names: [], total: 0 } : page.evaluate(inspectPersonalAdvertisers, false);
   async function stableRows(accept, message, timeout = 25000) {
     const until = Date.now() + timeout;
     let signature, since;
@@ -206,6 +208,10 @@ async function readCategoryAdvertisers(page, category, categoryNames) {
   }
   await page.getByText(/^Advertiser personali(?:\s*\(\s*\d+\s*\))?$/i)
     .filter({ visible: true }).first().waitFor({ timeout: 20000 });
+  if (process.env.SCALA_AWIN_TUTTE === '1') {
+    const clear = page.getByText('Reimposta ricerca', { exact: true }).filter({ visible: true });
+    if (await clear.count() === 1) await clear.click();
+  }
   const sector = page.getByText('Settore', { exact: true }).filter({ visible: true });
   const retail = page.getByText(/^Retail\s*&\s*Shopping(?:\s*\([\d.]+\))?$/i).filter({ visible: true });
   const label = page.getByText(new RegExp('^' + category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
@@ -327,14 +333,16 @@ async function readCategoryAdvertisers(page, category, categoryNames) {
 function categoryChoice(input) {
   const number = input.trim();
   if (number === '0') return null;
+  if (number.toLowerCase() === 'l') return 'locale';
   if (!/^[1-9]\d*$/.test(number) || Number(number) > categories.length) {
-    throw new Error('Scegli un numero da 0 a ' + categories.length + '.');
+    throw new Error('Scegli un numero da 0 a ' + categories.length + ' oppure L.');
   }
   return categories[Number(number) - 1];
 }
 
 async function chooseCategory() {
-  console.log('0. Aggiorna il catalogo con tutti i listini già salvati');
+  console.log('0. Scarica i listini degli iscritti in tutte le sottocategorie');
+  console.log('L. Aggiorna solo dai listini già salvati');
   categories.forEach((name, i) => console.log((i + 1) + '. ' + name));
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try { return categoryChoice(await prompt.question('Scegli la sottocategoria da scaricare: ')); }
@@ -345,42 +353,71 @@ async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--solo-verifica');
   const skipEmpty = args.includes('--salta-listini-vuoti');
-  const [choice, ...extra] = args.filter(arg => !['--solo-verifica', '--salta-listini-vuoti'].includes(arg));
-  if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria] [--solo-verifica | --salta-listini-vuoti]');
-  const category = choice === undefined ? await chooseCategory() : categoryChoice(choice);
-  if (skipEmpty && (category || dryRun)) throw new Error('Usa 0 --salta-listini-vuoti per importare i file già scaricati.');
-  if (dryRun && !category) throw new Error('Per la verifica scegli una sottocategoria diversa da 0.');
+  const localFlag = args.includes('--solo-locali');
+  const [choice, ...extra] = args.filter(arg => !['--solo-verifica', '--salta-listini-vuoti', '--solo-locali'].includes(arg));
+  if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria | L | --solo-locali] [--solo-verifica | --salta-listini-vuoti]');
+  const selection = choice === undefined && (localFlag || skipEmpty) ? 'locale'
+    : choice === undefined ? await chooseCategory() : categoryChoice(choice);
+  const localOnly = selection === 'locale' || localFlag || (selection === null && skipEmpty);
+  if (localOnly && selection !== null && selection !== 'locale') throw new Error('Usa --solo-locali senza un numero di sottocategoria.');
+  const allCategories = selection === null && !localOnly;
+  if (dryRun && (localOnly || allCategories)) throw new Error('Per la verifica scegli una sottocategoria diversa da 0.');
+  const requestedCategories = localOnly ? [] : allCategories ? categories : [selection];
   const publisher = '3150312';
   const local = path.join(__dirname, 'LISTINI');
   const working = fs.mkdtempSync(path.join(os.tmpdir(), 'scala-awin-'));
-  const staging = path.join(working, 'listini');
   const repo = path.join(working, 'sito');
   const downloadPath = path.join(__dirname, '.scarica-awin-' + randomUUID() + '.cjs');
+  const failures = [];
   let preserveWorking = false;
+  let downloaded = 0;
   try {
-    if (category) {
-      fs.mkdirSync(staging);
-      await downloadScript('a4bf3cc0ebecadc7450c6180d42a2d2af6407bc2', 'scarica-listini-awin.cjs', downloadPath, category);
-      console.log((dryRun ? 'Verifico il filtro Awin: ' : 'Scarico i listini Awin degli advertiser attivi: ') + category);
+    for (const [index, category] of requestedCategories.entries()) {
+      const staging = path.join(working, 'listini', category);
+      fs.mkdirSync(staging, { recursive: true });
+      if (allCategories) console.log('Categoria ' + (index + 1) + '/' + requestedCategories.length + ': ' + category);
       try {
-        run(process.execPath, [downloadPath, publisher], { env: { ...process.env, AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '' } });
+        await downloadScript('a4bf3cc0ebecadc7450c6180d42a2d2af6407bc2', 'scarica-listini-awin.cjs', downloadPath, category);
+        console.log((dryRun ? 'Verifico il filtro Awin: ' : 'Scarico i listini Awin degli advertiser attivi: ') + category);
+        run(process.execPath, [downloadPath, publisher], {
+          env: { ...process.env, AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '',
+            SCALA_AWIN_TUTTE: allCategories ? '1' : '' }
+        });
         if (dryRun) return;
+        if (!fs.readdirSync(staging).length) {
+          console.log('Nessun listino da salvare per ' + category + '.');
+          if (!allCategories) return;
+          continue;
+        }
         const destination = path.join(local, category);
         const count = keepLocalFeeds(staging, destination);
+        downloaded += count;
         console.log('Listini aggiornati: ' + count + ' | ' + destination);
       } catch (error) {
         if (fs.readdirSync(staging).some(name => feedExtension.test(name))) {
           preserveWorking = true;
           console.error('Download incompleto. Listini parziali conservati qui: ' + staging);
         }
-        throw error;
+        if (!allCategories) throw error;
+        failures.push(category);
+        console.error('Categoria non completata: ' + category + ' | ' + error.message);
+      } finally {
+        fs.rmSync(downloadPath, { force: true });
+      }
+    }
+    if (allCategories) {
+      console.log('Listini salvati nelle cartelle di categoria: ' + downloaded);
+      if (failures.length) console.warn('Categorie da riprovare: ' + failures.join(', '));
+      if (!downloaded) {
+        if (failures.length) process.exitCode = 1;
+        return;
       }
     }
     if (!fs.existsSync(local)) throw new Error('Cartella listini non trovata: ' + local);
     console.log('Aggiorno il catalogo con tutti i listini e le sottocartelle di ' + local);
     run('git', ['clone', '--depth', '1', '--single-branch', '--branch', 'main', repository, repo]);
     run(process.execPath, [path.join(repo, 'tools', 'awin', 'importa-listini-awin.cjs'), repo, local, publisher], {
-      env: { ...process.env, SCALA_AWIN_SALTA_LISTINI_VUOTI: skipEmpty ? '1' : '' }
+      env: { ...process.env, SCALA_AWIN_SALTA_LISTINI_VUOTI: skipEmpty || allCategories ? '1' : '' }
     });
     publish(repo);
     if (!await verifyOnline(repo)) {
@@ -389,6 +426,7 @@ async function main() {
       return;
     }
     console.log('Catalogo verificato online: ' + publicSite);
+    if (failures.length) process.exitCode = 1;
   } finally {
     fs.rmSync(downloadPath, { force: true });
     if (!preserveWorking) fs.rmSync(working, { recursive: true, force: true });

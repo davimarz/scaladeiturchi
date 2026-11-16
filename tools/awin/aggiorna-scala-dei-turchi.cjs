@@ -32,6 +32,31 @@ function run(command, args, options = {}) {
   }
 }
 
+function chooseItalianListedFeed(name, links, matches, columns, urlIndex, log = console.log) {
+  if (links.length === 1) return links[0];
+  const normalize = value => String(value ?? '').trim().toLowerCase().replace(/_/g, '-');
+  const language = columns.indexOf('language');
+  const id = columns.indexOf('feed id');
+  const feedName = columns.indexOf('feed name');
+  const allowed = new Set(links);
+  const rows = matches.filter(row => allowed.has(row[urlIndex]?.trim()));
+  const tag = row => normalize(row[language]);
+  const italian = rows.filter(row => /^(?:italian|italiano|it(?:-it)?)$/i.test(tag(row)));
+  const italy = italian.filter(row => tag(row) === 'it-it');
+  const best = [...new Set((italy.length ? italy : italian).map(row => row[urlIndex].trim()))];
+  if (best.length === 1) {
+    log(name + ' | feed italiano identificato nella lista Awin');
+    return best[0];
+  }
+  const clean = value => String(value ?? '').replace(/https?:\/\/\S+/gi, '[link omesso]').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 90);
+  for (const row of italian.length ? italian : rows) {
+    log(name + ' | feed ' + clean(row[id]) + ' | ' + clean(row[feedName]) + ' | lingua: ' + (clean(row[language]) || 'non indicata'));
+  }
+  throw new Error(italian.length
+    ? 'Più feed italiani per questo advertiser: impossibile identificare un solo listino.'
+    : 'Nessun feed italiano identificabile tra i link disponibili.');
+}
+
 async function downloadScript(revision, name, destination, category) {
   const response = await fetch(rawBase + revision + '/tools/awin/' + name, {
     redirect: 'error',
@@ -52,6 +77,14 @@ async function downloadScript(revision, name, destination, category) {
     ' if (process.env.SCALA_AWIN_SOLO_VERIFICA === "1") return;' +
     ' if (!selection.targets.length) { console.error("Nessun listino da scaricare."); process.exitCode = 1; return; }')
     .replace(requestHook, 'const requested = selection.targets.map(name => name.trim().toLowerCase());');
+  const listedStart = '    if (links.length !== 1) {';
+  const listedEnd = '    return links[0];';
+  const listedAt = script.indexOf(listedStart);
+  const listedStop = script.indexOf(listedEnd, listedAt);
+  if (listedAt < 0 || listedStop < 0) throw new Error('Selettore della lista Awin non riconosciuto.');
+  script = script.slice(0, listedAt) +
+    '    return (' + chooseItalianListedFeed.toString() + ')(name, links, matches, columns, url);' +
+    script.slice(listedStop + listedEnd.length);
   // Reuse the pinned helper's validation and saving for the official-list fallback.
   const saveStart = "  setStage('Verifica del nome del file');";
   const saveEnd = '\n}\n\nfunction inspectPersonalAdvertisers';

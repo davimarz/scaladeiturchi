@@ -113,67 +113,24 @@ async function verifyOnline(repo) {
   return false;
 }
 
-// The public directory exposes the category tree. Only programs already joined
-// in Advertiser personali may become download targets.
+// Filter inside Iscritto; never leave the joined advertiser view.
 async function readCategoryAdvertisers(page, category) {
-  const normalize = name => name.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
-  const joined = await readJoinedAdvertisers(page);
-  if (!joined.length) throw new Error('Non riesco a verificare gli Advertiser personali.');
-  const joinedByName = new Map(joined.map(name => [normalize(name), name]));
-  console.log('Awin | Advertiser personali rilevati: ' + joinedByName.size + '. Verifico la categoria nella scheda generale.');
-
-  const allText = /^Tutti gli advertiser$/i;
-  const allTab = page.getByRole('tab', { name: allText })
-    .or(page.getByRole('link', { name: allText })).or(page.getByRole('button', { name: allText }));
-  const tab = allTab.filter({ visible: true });
-  if (await tab.count() === 1) await tab.click({ timeout: 5000 }).catch(() => {});
-  else {
-    const textTab = page.getByText(allText).filter({ visible: true });
-    if (await textTab.count() === 1) await textTab.click({ timeout: 5000 }).catch(() => {});
-  }
-  const snapshot = () => page.evaluate(() => {
-    const clean = value => (value ?? '').replace(/\s+/g, ' ').trim();
-    const visible = node => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden';
-    const heading = [...document.querySelectorAll('body *')].find(node =>
-      visible(node) && /^Tutti gli advertiser\s*\(\s*[\d.]+\s*\)$/i.test(clean(node.textContent)) &&
-      ![...node.children].some(child => child.textContent.trim() === node.textContent.trim() && visible(child)));
-    if (!heading) return null;
-    const total = Number(clean(heading.textContent).match(/\(\s*([\d.]+)\s*\)/)[1].replaceAll('.', ''));
-    if (!Number.isSafeInteger(total)) return null;
-    if (total === 0) return { total, names: [] };
-    for (let scope = heading.parentElement; scope; scope = scope.parentElement) {
-      const table = [...scope.querySelectorAll('table, [role="table"], [role="grid"]')].find(candidate =>
-        visible(candidate) && (heading.compareDocumentPosition(candidate) & Node.DOCUMENT_POSITION_FOLLOWING) &&
-        [...candidate.querySelectorAll('th, [role="columnheader"]')].some(cell => /^advertiser$/i.test(clean(cell.innerText))));
-      if (!table) continue;
-      const names = [...table.querySelectorAll('tr, [role="row"]')].filter(visible).map(row => {
-        const cell = [...row.children].find(node => node.matches('td, [role="cell"], [role="gridcell"]'));
-        return clean(cell?.innerText).replace(/\s*\((?:iscritt[oi]|non iscritt[oi]|in attesa|invit[oa]|rifiutat[oi]|sospes[oi]|chius[oi])\)\s*$/i, '');
-      }).filter(name => name && !/^advertiser$/i.test(name));
-      if (names.length) return { total, names };
-    }
-    return null;
-  });
+  const snapshot = () => page.evaluate(inspectPersonalAdvertisers, false);
   async function stableRows(accept, message, timeout = 25000) {
     const until = Date.now() + timeout;
     let signature, since;
     while (Date.now() < until) {
       const rows = await snapshot();
       const key = JSON.stringify(rows);
-      if (!rows || !await accept(rows)) signature = undefined;
+      if (!rows?.names || !await accept(rows)) signature = undefined;
       else if (signature !== key) { signature = key; since = Date.now(); }
       else if (Date.now() - since >= 1200) return rows;
       await page.waitForTimeout(250);
     }
     throw new Error(message);
   }
-  const allHeading = page.getByText(/^Tutti gli advertiser\s*\(/i).filter({ visible: true }).first();
-  if (!await allHeading.isVisible()) {
-    console.log('Awin | Se serve, apri «Tutti gli advertiser» nel browser. Non selezionare ancora la categoria.');
-    await allHeading.waitFor({ timeout: 90000 }).catch(() => {
-      throw new Error('La scheda «Tutti gli advertiser» non è stata confermata. Nessun listino scaricato.');
-    });
-  }
+  await page.getByText(/^Advertiser personali(?:\s*\(\s*\d+\s*\))?$/i)
+    .filter({ visible: true }).first().waitFor({ timeout: 20000 });
   const sector = page.getByText('Retail & Shopping', { exact: true }).filter({ visible: true });
   await sector.waitFor({ timeout: 15000 });
   const sectorItem = sector.locator('xpath=ancestor-or-self::li[1]');
@@ -185,9 +142,9 @@ async function readCategoryAdvertisers(page, category) {
     await label.waitFor({ timeout: 4000 }).catch(() => {});
   }
   if (!await label.isVisible()) {
-    console.log('Awin | In «Tutti gli advertiser», apri Retail & Shopping usando la freccia. Lascia la categoria deselezionata.');
+    console.log('Awin | Nella scheda «Iscritto», apri Retail & Shopping usando la freccia. Lascia la categoria deselezionata.');
     await label.waitFor({ timeout: 90000 }).catch(() => {
-      throw new Error('La sottocategoria «' + category + '» non è visibile nemmeno in «Tutti gli advertiser». Nessun listino scaricato.');
+      throw new Error('La sottocategoria «' + category + '» non è visibile nella scheda «Iscritto». Nessun listino scaricato.');
     });
   }
   const item = label.locator('xpath=ancestor-or-self::li[1]');
@@ -215,9 +172,19 @@ async function readCategoryAdvertisers(page, category) {
     const state = await selection();
     return state.valid && state.selected && !state.other;
   };
-  let current = await stableRows(rows => rows.total < unfiltered.total ? categoryOnly() : false,
+  let current = await stableRows(rows => {
+    const reduced = Number.isSafeInteger(rows.total) && Number.isSafeInteger(unfiltered.total)
+      ? rows.total < unfiltered.total
+      : rows.names.length < unfiltered.names.length && rows.names.every(name => unfiltered.names.includes(name));
+    return reduced ? categoryOnly() : false;
+  },
     'Awin non ha confermato un elenco più ristretto per «' + category + '». Nessun listino scaricato.');
   const expected = current.total;
+  if (expected === null) {
+    const next = page.getByText(/^(?:pagina )?successiv[ao](?:\s*[›»])?$/i).filter({ visible: true });
+    if (await next.count()) throw new Error('La paginazione degli advertiser filtrati non è verificabile.');
+    return { joined: [...new Set([...unfiltered.names, ...current.names])], targets: current.names };
+  }
   const seen = new Set();
   const names = new Set();
   while (names.size < expected) {
@@ -225,7 +192,7 @@ async function readCategoryAdvertisers(page, category) {
     const key = JSON.stringify(current.names);
     if (seen.has(key)) throw new Error('Awin ha ripetuto una pagina della categoria.');
     seen.add(key);
-    for (const name of current.names) names.add(normalize(name));
+    for (const name of current.names) names.add(name);
     if (names.size === expected) break;
     if (names.size > expected) throw new Error('Il totale della categoria non corrisponde alle righe.');
     const nextLabel = /^(?:pagina )?successiv[ao](?:\s*[›»])?$/i;
@@ -237,9 +204,9 @@ async function readCategoryAdvertisers(page, category) {
       rows.total === expected && JSON.stringify(rows.names) !== key ? categoryOnly() : false,
     'La pagina successiva della categoria non è stata confermata.');
   }
-  const targets = [...names].filter(name => joinedByName.has(name)).map(name => joinedByName.get(name));
-  console.log('Awin | ' + category + ': ' + names.size + ' programmi nella categoria, ' + targets.length + ' nei tuoi Advertiser personali.');
-  return { joined, targets };
+  const targets = [...names];
+  console.log('Awin | Iscritto / ' + category + ': ' + targets.length + ' advertiser.');
+  return { joined: [...new Set([...unfiltered.names, ...targets])], targets };
 }
 
 function categoryChoice(input) {

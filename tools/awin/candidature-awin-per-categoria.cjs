@@ -7,6 +7,7 @@ const { createInterface } = require('node:readline');
 
 const directory = 'https://ui.awin.com/awin/affiliate/3150312/merchant-directory/index/tab/active/page/1';
 const site = 'https://davimarz.github.io/scaladeiturchi/';
+const attemptsFile = path.join(__dirname, '.candidature-scala.jsonl');
 const message = 'Salve, gestisco la web app "Scala dei Turchi" (https://davimarz.github.io/scaladeiturchi/), un portale interattivo dedicato alla pubblicazione di prodotti in offerta. Il nostro pubblico è composto da appassionati e acquirenti alla ricerca di offerte e nuove uscite. Intendiamo promuovere i prodotti e le vostre campagne tramite banner display dedicati e link affiliati diretti alle offerte del catalogo. Grazie.';
 
 const categories = [
@@ -198,7 +199,7 @@ async function submitSavedLogin(page) {
   return null;
 }
 
-async function runPass(confirmed, category) {
+async function runPass(confirmed, category, attempted) {
   const selection = { sector: 'Retail & Shopping', category };
   console.log('Scala dei Turchi | Italia | Feed prodotto: Sì | Retail & Shopping / ' + category);
   let browser;
@@ -399,6 +400,11 @@ async function runPass(confirmed, category) {
         continue;
       }
       seen.add(name);
+      if (attempted.has(name) && !confirmed.has(name)) {
+        console.log(name + ' | Tentativo già registrato. Verifica lo stato in Awin.');
+        skipped++;
+        continue;
+      }
       if (confirmed.has(name)) {
         throw new Error(name + ' | candidatura già confermata, ma Awin mostra ancora Iscriviti. Controlla In attesa.');
       }
@@ -456,11 +462,28 @@ async function runPass(confirmed, category) {
       }
       await field.fill(message);
       await terms.check();
-      await submit.click();
-      if (!await acknowledgeSubmission(page)) {
-        throw new Error(name + ' | Invio tentato, ma il testo del popup non è stato riconosciuto. Controlla «In attesa» prima di riprovare.');
+      await fs.appendFile(attemptsFile, JSON.stringify({ name, category, status: 'invio-avviato', at: new Date().toISOString() }) + '\n');
+      attempted.add(name);
+      try {
+        await submit.click();
+        if (!await acknowledgeSubmission(page)) {
+          throw new Error('Ricevuta Awin non riconosciuta.');
+        }
+        confirmed.add(name);
+        await fs.appendFile(attemptsFile, JSON.stringify({ name, category, status: 'confermato', at: new Date().toISOString() }) + '\n');
+      } catch (error) {
+        const detail = name + ' | ' + error.message + ' Controlla «In attesa». Il tentativo è registrato per evitare il reinvio.';
+        console.error(detail);
+        console.log('Candidature confermate in questa esecuzione: ' + confirmed.size);
+        if (process.stdin.isTTY && !page.isClosed()) {
+          console.log('Il browser resta aperto per 2 minuti. Premi Invio per chiudere.');
+          const inspection = createInterface({ input: process.stdin });
+          const timer = setTimeout(() => inspection.close(), 120000);
+          try { for await (const line of inspection) break; }
+          finally { clearTimeout(timer); inspection.close(); }
+        }
+        throw new Error(detail);
       }
-      confirmed.add(name);
       submitted++;
       console.log(name + ' | richiesta inviata, ricevuta Awin verificata');
     }
@@ -471,10 +494,10 @@ async function runPass(confirmed, category) {
   }
 }
 
-async function runCategory(category) {
+async function runCategory(category, attempted) {
   const confirmed = new Set();
   for (;;) {
-    const { submitted, skipped } = await runPass(confirmed, category);
+    const { submitted, skipped } = await runPass(confirmed, category, attempted);
     if (submitted) {
       console.log('Awin | ricontrollo dalla prima pagina: i risultati possono essersi spostati dopo gli invii.');
       continue;
@@ -521,9 +544,14 @@ async function chooseCategories(value) {
 
 async function main() {
   const chosen = await chooseCategories();
+  const previous = await fs.readFile(attemptsFile, 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  });
+  const attempted = new Set(previous.split('\n').filter(Boolean).map(line => JSON.parse(line).name));
   for (const category of chosen) {
     console.log('Sottocategoria selezionata: ' + category);
-    await runCategory(category);
+    await runCategory(category, attempted);
   }
 }
 

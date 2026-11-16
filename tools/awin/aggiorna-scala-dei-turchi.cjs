@@ -43,8 +43,12 @@ async function downloadScript(revision, name, destination, category) {
   if (script.split(summary).length !== 2) throw new Error('Versione dello scaricatore Awin non riconosciuta.');
   const hook = 'const active = await readJoinedAdvertisers(page);';
   if (script.split(hook).length !== 2) throw new Error('Punto di selezione categoria Awin non riconosciuto.');
-  script = script.replace(hook, () => 'let active; try { active = await (' + readCategoryAdvertisers.toString() +
-    ')(page, ' + JSON.stringify(category) + '); } catch (error) { console.error("Awin | " + error.message); process.exitCode = 1; return; }');
+  const targetHook = 'const targets = requested.length ? active.filter(name => requested.includes(name.toLowerCase())) : active;';
+  if (script.split(targetHook).length !== 2) throw new Error('Punto di selezione dei listini Awin non riconosciuto.');
+  script = script.replace(hook, () => 'let selection; try { selection = await (' + readCategoryAdvertisers.toString() +
+    ')(page, ' + JSON.stringify(category) + '); } catch (error) { console.error("Awin | " + error.message); process.exitCode = 1; return; }' +
+    ' const active = selection.joined; if (!selection.targets.length) { console.log("Awin | Nessun advertiser iscritto nella categoria. Nessun listino scaricato."); process.exitCode = 1; return; }')
+    .replace(targetHook, 'const targets = selection.targets;');
   // The shared downloader can exit successfully with only part of the batch.
   fs.writeFileSync(destination, script.replace(summary, summary +
     '\n    if (completed !== targets.length) process.exitCode = 1;'), { flag: 'wx' });
@@ -109,113 +113,133 @@ async function verifyOnline(repo) {
   return false;
 }
 
-// Runs inside the pinned downloader, reusing its authenticated active-directory browser.
+// The public directory exposes the category tree. Only programs already joined
+// in Advertiser personali may become download targets.
 async function readCategoryAdvertisers(page, category) {
-  const sector = page.getByText('Retail & Shopping', { exact: true }).filter({ visible: true });
-  await sector.waitFor();
-  const sectorItem = sector.locator('xpath=ancestor-or-self::li[1]');
-  const anyLabel = page.getByText(category, { exact: true });
-  // Choose the closest branch containing the category, rather than a nested label wrapper.
-  const scopedBranch = sector.locator('xpath=ancestor-or-self::li').filter({ has: anyLabel }).last();
-  const label = scopedBranch.getByText(category, { exact: true }).filter({ visible: true });
-  const filterItem = text => text.locator('xpath=ancestor-or-self::li[contains(concat(" ", normalize-space(@class), " "), " checkbox ")][1]');
-  const isChecked = locator => locator.evaluate(node => node.classList.contains('selected') ||
-    Boolean(node.querySelector(':scope > input:checked, :scope > [aria-checked="true"]')));
-  let manual = false;
-  if (!await label.isVisible()) {
-    const toggles = sectorItem.locator(':scope > .hitarea, :scope > [aria-expanded="false"], :scope > :not(ul) > [aria-expanded="false"], :scope > summary, :scope > details:not([open]) > summary')
-      .filter({ visible: true });
-    if (await toggles.count() === 1) {
-      await toggles.click({ timeout: 3000 }).catch(() => {});
-      await label.waitFor({ timeout: 4000 }).catch(() => {});
-    }
-    if (!await label.isVisible()) {
-      manual = true;
-      console.log('Awin | Nel browser apri il ramo Retail & Shopping con la freccia. Per ora lascia la casella «' + category + '» deselezionata.');
-      await label.waitFor({ timeout: 90000 }).catch(() => {
-        throw new Error('Non è stato possibile individuare «' + category + '» nel ramo aperto. Nessun listino verrà scaricato.');
-      });
-    }
+  const normalize = name => name.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+  const joined = await readJoinedAdvertisers(page);
+  if (!joined.length) throw new Error('Non riesco a verificare gli Advertiser personali.');
+  const joinedByName = new Map(joined.map(name => [normalize(name), name]));
+  console.log('Awin | Advertiser personali rilevati: ' + joinedByName.size + '. Verifico la categoria nella scheda generale.');
+
+  const allText = /^Tutti gli advertiser$/i;
+  const allTab = page.getByRole('tab', { name: allText })
+    .or(page.getByRole('link', { name: allText })).or(page.getByRole('button', { name: allText }));
+  const tab = allTab.filter({ visible: true });
+  if (await tab.count() === 1) await tab.click({ timeout: 5000 }).catch(() => {});
+  else {
+    const textTab = page.getByText(allText).filter({ visible: true });
+    if (await textTab.count() === 1) await textTab.click({ timeout: 5000 }).catch(() => {});
   }
-  const item = filterItem(label);
-  if (await item.count() !== 1) throw new Error('Casella di categoria non riconosciuta: ' + category);
-  const checked = () => isChecked(item);
-  // Measure the fully loaded personal directory before touching the filter.
-  const stableRows = async (accept, message, timeout = 20000) => {
+  const snapshot = () => page.evaluate(() => {
+    const clean = value => (value ?? '').replace(/\s+/g, ' ').trim();
+    const visible = node => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden';
+    const heading = [...document.querySelectorAll('body *')].find(node =>
+      visible(node) && /^Tutti gli advertiser\s*\(\s*[\d.]+\s*\)$/i.test(clean(node.textContent)) &&
+      ![...node.children].some(child => child.textContent.trim() === node.textContent.trim() && visible(child)));
+    if (!heading) return null;
+    const total = Number(clean(heading.textContent).match(/\(\s*([\d.]+)\s*\)/)[1].replaceAll('.', ''));
+    if (!Number.isSafeInteger(total)) return null;
+    if (total === 0) return { total, names: [] };
+    for (let scope = heading.parentElement; scope; scope = scope.parentElement) {
+      const table = [...scope.querySelectorAll('table, [role="table"], [role="grid"]')].find(candidate =>
+        visible(candidate) && (heading.compareDocumentPosition(candidate) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+        [...candidate.querySelectorAll('th, [role="columnheader"]')].some(cell => /^advertiser$/i.test(clean(cell.innerText))));
+      if (!table) continue;
+      const names = [...table.querySelectorAll('tr, [role="row"]')].filter(visible).map(row => {
+        const cell = [...row.children].find(node => node.matches('td, [role="cell"], [role="gridcell"]'));
+        return clean(cell?.innerText).replace(/\s*\((?:iscritt[oi]|non iscritt[oi]|in attesa|invit[oa]|rifiutat[oi]|sospes[oi]|chius[oi])\)\s*$/i, '');
+      }).filter(name => name && !/^advertiser$/i.test(name));
+      if (names.length) return { total, names };
+    }
+    return null;
+  });
+  async function stableRows(accept, message, timeout = 25000) {
     const until = Date.now() + timeout;
-    let previous, since;
+    let signature, since;
     while (Date.now() < until) {
-      const snapshot = await page.evaluate(inspectPersonalAdvertisers, false);
-      const signature = JSON.stringify(snapshot);
-      if (!snapshot.names?.length || !await accept(snapshot)) {
-        previous = undefined;
-      } else if (signature !== previous) {
-        previous = signature;
-        since = Date.now();
-      } else if (Date.now() - since >= 1200) {
-        return snapshot;
-      }
+      const rows = await snapshot();
+      const key = JSON.stringify(rows);
+      if (!rows || !await accept(rows)) signature = undefined;
+      else if (signature !== key) { signature = key; since = Date.now(); }
+      else if (Date.now() - since >= 1200) return rows;
       await page.waitForTimeout(250);
     }
     throw new Error(message);
-  };
-  const otherCategories = async () => item.evaluate(target => {
-    const sector = target.closest('ul')?.closest('li');
-    const tree = sector?.closest('ul');
-    if (!tree) throw new Error('Albero delle categorie Awin non verificabile.');
-    return [...tree.querySelectorAll('li.checkbox')].some(node =>
-      node !== target && (node.classList.contains('selected') ||
-        node.querySelector(':scope > input:checked, :scope > [aria-checked="true"]')));
+  }
+  const allHeading = page.getByText(/^Tutti gli advertiser\s*\(/i).filter({ visible: true }).first();
+  if (!await allHeading.isVisible()) {
+    console.log('Awin | Se serve, apri «Tutti gli advertiser» nel browser. Non selezionare ancora la categoria.');
+    await allHeading.waitFor({ timeout: 90000 }).catch(() => {
+      throw new Error('La scheda «Tutti gli advertiser» non è stata confermata. Nessun listino scaricato.');
+    });
+  }
+  const sector = page.getByText('Retail & Shopping', { exact: true }).filter({ visible: true });
+  await sector.waitFor({ timeout: 15000 });
+  const sectorItem = sector.locator('xpath=ancestor-or-self::li[1]');
+  const label = page.getByText(category, { exact: true }).filter({ visible: true });
+  const toggle = sectorItem.locator(':scope > .hitarea, :scope > [aria-expanded="false"], :scope > :not(ul) > [aria-expanded="false"]')
+    .filter({ visible: true });
+  if (!await label.isVisible() && await toggle.count() === 1) {
+    await toggle.click({ timeout: 3500 }).catch(() => {});
+    await label.waitFor({ timeout: 4000 }).catch(() => {});
+  }
+  if (!await label.isVisible()) {
+    console.log('Awin | In «Tutti gli advertiser», apri Retail & Shopping usando la freccia. Lascia la categoria deselezionata.');
+    await label.waitFor({ timeout: 90000 }).catch(() => {
+      throw new Error('La sottocategoria «' + category + '» non è visibile nemmeno in «Tutti gli advertiser». Nessun listino scaricato.');
+    });
+  }
+  const item = label.locator('xpath=ancestor-or-self::li[1]');
+  const selection = () => item.evaluate(target => {
+    const subgroup = target.closest('ul');
+    const parent = subgroup?.closest('li');
+    const tree = parent?.closest('ul');
+    const caption = parent && [...parent.children].filter(node => node !== subgroup)
+      .map(node => node.textContent?.trim()).filter(Boolean).join(' ');
+    if (!tree || !/^Retail & Shopping$/i.test(caption ?? '')) return { valid: false };
+    const checked = node => !node.classList.contains('indeterminate') &&
+      (node.classList.contains('selected') || node.matches('[aria-checked="true"]') ||
+       !!node.querySelector(':scope > :is(input:checked,[aria-checked="true"]), :scope > :is(label,span,div) > :is(input:checked,[aria-checked="true"])'));
+    return { valid: true, selected: checked(target), other: [...tree.querySelectorAll('li')].some(node => node !== target && checked(node)) };
   });
-  if (await otherCategories()) throw new Error('Deseleziona gli altri settori o sottocategorie prima di scaricare «' + category + '».');
-  // An already selected category is not proof that the table reflects it.
-  if (await checked()) {
-    await label.click();
-    await stableRows(async () => !await checked(), 'Impossibile azzerare il filtro «' + category + '».');
-  }
-  const before = await stableRows(async () => !await checked(), 'Elenco iniziale degli advertiser non verificabile.');
-  const beforeNames = new Set(before.names);
-  if (manual) console.log('Awin | Ora seleziona solo «' + category + '» nel browser. Attendo la tabella filtrata.');
-  else await label.click();
-  const filtered = await stableRows(async after => await checked() && !await otherCategories() && (
-    Number.isSafeInteger(before.total) && Number.isSafeInteger(after.total)
-      ? after.total > 0 && after.total < before.total
-      : after.names.length < before.names.length && after.names.every(name => beforeNames.has(name))
-  ), 'Awin non ha confermato un elenco più ristretto per «' + category + '». Nessun listino verrà scaricato.', manual ? 90000 : 20000);
-  if (filtered.total === null) {
-    const next = page.getByText(/^(?:pagina )?successiv[ao](?:\s*[›»])?$/i).filter({ visible: true });
-    if (await next.count()) throw new Error('Awin non indica il totale della categoria: la paginazione non è verificabile.');
-    console.log('Awin | ' + category + ' | ' + filtered.names.length + ' advertiser dopo il filtro');
-    return filtered.names;
-  }
-  console.log('Awin | ' + category + ' | ' + filtered.total + ' advertiser dopo il filtro');
+  const initial = await selection();
+  if (!initial.valid || initial.other) throw new Error('I controlli di categoria non sono verificabili o ci sono altri settori selezionati.');
+  if (initial.selected) await label.click();
+  const unfiltered = await stableRows(async () => {
+    const state = await selection();
+    return state.valid && !state.selected && !state.other;
+  }, 'Elenco generale iniziale non verificabile.');
+  await label.click();
+  const categoryOnly = async () => {
+    const state = await selection();
+    return state.valid && state.selected && !state.other;
+  };
+  let current = await stableRows(rows => rows.total < unfiltered.total ? categoryOnly() : false,
+    'Awin non ha confermato un elenco più ristretto per «' + category + '». Nessun listino scaricato.');
+  const expected = current.total;
+  const seen = new Set();
   const names = new Set();
-  const visited = new Set();
-  const expected = filtered.total;
-  let current = filtered;
-  for (;;) {
-    if (!await checked()) throw new Error('Awin ha perso il filtro: ' + category);
-    if (await otherCategories()) throw new Error('Sono selezionate più categorie: ' + category);
-    if (!current.names.length || !await checked()) throw new Error('Elenco filtrato non verificabile: ' + category);
-    if (current.total !== expected) throw new Error('Il numero di advertiser filtrati è cambiato.');
-    const signature = JSON.stringify(current.names);
-    if (visited.has(signature)) throw new Error('Awin ha ripetuto una pagina.');
-    visited.add(signature);
-    for (const name of current.names) names.add(name);
-    if (names.size === expected) return [...names];
-    if (names.size > expected) throw new Error('Awin mostra più advertiser del totale filtrato.');
+  while (names.size < expected) {
+    if (!await categoryOnly()) throw new Error('Il filtro di categoria è cambiato durante la lettura.');
+    const key = JSON.stringify(current.names);
+    if (seen.has(key)) throw new Error('Awin ha ripetuto una pagina della categoria.');
+    seen.add(key);
+    for (const name of current.names) names.add(normalize(name));
+    if (names.size === expected) break;
+    if (names.size > expected) throw new Error('Il totale della categoria non corrisponde alle righe.');
     const nextLabel = /^(?:pagina )?successiv[ao](?:\s*[›»])?$/i;
     const next = page.getByRole('link', { name: nextLabel }).or(page.getByRole('button', { name: nextLabel }))
-      .or(page.getByText(nextLabel)).filter({ visible: true });
-    if (await next.count() !== 1 || !await next.isEnabled()) {
-      throw new Error('Paginazione filtrata non verificabile.');
-    }
+      .or(page.getByText(nextLabel)).filter({ visible: true }).first();
+    if (!await next.isVisible() || !await next.isEnabled()) throw new Error('Non riesco a leggere tutte le pagine della categoria.');
     await next.click();
-    current = await stableRows(async after => {
-      if (!await checked() || await otherCategories()) throw new Error('Il filtro è stato perso passando alla pagina successiva.');
-      return after.total === expected && JSON.stringify(after.names) !== signature;
-    }, 'La pagina successiva filtrata non si è caricata.');
+    current = await stableRows(rows =>
+      rows.total === expected && JSON.stringify(rows.names) !== key ? categoryOnly() : false,
+    'La pagina successiva della categoria non è stata confermata.');
   }
+  const targets = [...names].filter(name => joinedByName.has(name)).map(name => joinedByName.get(name));
+  console.log('Awin | ' + category + ': ' + names.size + ' programmi nella categoria, ' + targets.length + ' nei tuoi Advertiser personali.');
+  return { joined, targets };
 }
 
 function categoryChoice(input) {

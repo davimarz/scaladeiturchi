@@ -43,12 +43,15 @@ async function downloadScript(revision, name, destination, category) {
   if (script.split(summary).length !== 2) throw new Error('Versione dello scaricatore Awin non riconosciuta.');
   const hook = 'const active = await readJoinedAdvertisers(page);';
   if (script.split(hook).length !== 2) throw new Error('Punto di selezione categoria Awin non riconosciuto.');
-  const targetHook = 'const targets = requested.length ? active.filter(name => requested.includes(name.toLowerCase())) : active;';
-  if (script.split(targetHook).length !== 2) throw new Error('Punto di selezione dei listini Awin non riconosciuto.');
+  const requestHook = 'const requested = process.argv.slice(3).map(name => name.trim().toLowerCase());';
+  if (script.split(requestHook).length !== 2) throw new Error('Punto di selezione dei listini Awin non riconosciuto.');
   script = script.replace(hook, () => 'let selection; try { selection = await (' + readCategoryAdvertisers.toString() +
     ')(page, ' + JSON.stringify(category) + '); } catch (error) { console.error("Awin | " + error.message); process.exitCode = 1; return; }' +
-    ' const active = selection.joined; if (!selection.targets.length) { console.log("Awin | Nessun advertiser iscritto nella categoria. Nessun listino scaricato."); process.exitCode = 1; return; }')
-    .replace(targetHook, 'const targets = selection.targets;');
+    ' const active = selection.joined;' +
+    ' console.log("Awin | Iscritto / " + ' + JSON.stringify(category) + ' + ": " + (selection.targets.join(", ") || "nessun advertiser"));' +
+    ' if (process.env.SCALA_AWIN_SOLO_VERIFICA === "1") return;' +
+    ' if (!selection.targets.length) { console.error("Nessun listino da scaricare."); process.exitCode = 1; return; }')
+    .replace(requestHook, 'const requested = selection.targets.map(name => name.trim().toLowerCase());');
   // The shared downloader can exit successfully with only part of the batch.
   fs.writeFileSync(destination, script.replace(summary, summary +
     '\n    if (completed !== targets.length) process.exitCode = 1;'), { flag: 'wx' });
@@ -131,35 +134,48 @@ async function readCategoryAdvertisers(page, category) {
   }
   await page.getByText(/^Advertiser personali(?:\s*\(\s*\d+\s*\))?$/i)
     .filter({ visible: true }).first().waitFor({ timeout: 20000 });
-  const sector = page.getByText('Retail & Shopping', { exact: true }).filter({ visible: true });
-  await sector.waitFor({ timeout: 15000 });
-  const sectorItem = sector.locator('xpath=ancestor-or-self::li[1]');
-  const label = page.getByText(category, { exact: true }).filter({ visible: true });
-  const toggle = sectorItem.locator(':scope > .hitarea, :scope > [aria-expanded="false"], :scope > :not(ul) > [aria-expanded="false"]')
+  const sector = page.getByText(/^Retail\s*&\s*Shopping(?:\s*\([\d.]+\))?$/i).filter({ visible: true });
+  if (!(await sector.waitFor({ timeout: 15000 }).then(() => true, () => false))) {
+    throw new Error('Filtro Settore → Retail & Shopping non trovato nella scheda «Iscritto».');
+  }
+  // Scope to the actual tree item; a nearest <li> can be a wrapper for the caption.
+  const branch = sector.locator('xpath=ancestor-or-self::*[(self::li or @role="treeitem") and (./ul or ./*[@role="group" or @aria-expanded or contains(concat(" ",normalize-space(@class)," ")," hitarea ") or self::details])][1]');
+  const label = branch.getByText(new RegExp('^' + category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+    '(?:\\s*\\([\\d.]+\\))?$', 'i')).filter({ visible: true });
+  const toggle = branch.locator(':scope > .hitarea, :scope > [aria-expanded="false"], :scope > :not(ul):not([role="group"]) > [aria-expanded="false"], :scope > details:not([open]) > summary')
     .filter({ visible: true });
   if (!await label.isVisible() && await toggle.count() === 1) {
     await toggle.click({ timeout: 3500 }).catch(() => {});
     await label.waitFor({ timeout: 4000 }).catch(() => {});
   }
   if (!await label.isVisible()) {
-    console.log('Awin | Nella scheda «Iscritto», apri Retail & Shopping usando la freccia. Lascia la categoria deselezionata.');
+    console.log('Awin | Nella scheda «Iscritto», apri Settore → Retail & Shopping con la freccia, senza spuntare la casella principale.');
     await label.waitFor({ timeout: 90000 }).catch(() => {
-      throw new Error('La sottocategoria «' + category + '» non è visibile nella scheda «Iscritto». Nessun listino scaricato.');
+      throw new Error('Sottocategoria «' + category + '» non trovata nel ramo. Nessun listino scaricato.');
     });
   }
-  const item = label.locator('xpath=ancestor-or-self::li[1]');
-  const selection = () => item.evaluate(target => {
-    const subgroup = target.closest('ul');
-    const parent = subgroup?.closest('li');
-    const tree = parent?.closest('ul');
-    const caption = parent && [...parent.children].filter(node => node !== subgroup)
-      .map(node => node.textContent?.trim()).filter(Boolean).join(' ');
-    if (!tree || !/^Retail & Shopping$/i.test(caption ?? '')) return { valid: false };
-    const checked = node => !node.classList.contains('indeterminate') &&
-      (node.classList.contains('selected') || node.matches('[aria-checked="true"]') ||
-       !!node.querySelector(':scope > :is(input:checked,[aria-checked="true"]), :scope > :is(label,span,div) > :is(input:checked,[aria-checked="true"])'));
-    return { valid: true, selected: checked(target), other: [...tree.querySelectorAll('li')].some(node => node !== target && checked(node)) };
-  });
+  const item = label.locator('xpath=ancestor-or-self::*[self::li or @role="treeitem"][1]');
+  const selection = async () => {
+    if (await branch.count() !== 1 || await item.count() !== 1) return { valid: false };
+    return branch.evaluate((root, wanted) => {
+      const rowSelector = 'li, [role="treeitem"]';
+      const clean = value => (value ?? '').replace(/\s+/g, ' ').trim().replace(/\s*\([\d.]+\)$/, '').toLowerCase();
+      const caption = node => [...node.childNodes].map(child => {
+        if (child.nodeType === Node.TEXT_NODE) return child.textContent;
+        if (child.nodeType !== Node.ELEMENT_NODE || child.matches('ul, ol, [role="group"], ' + rowSelector)) return '';
+        return caption(child);
+      }).join(' ');
+      const matching = [...root.querySelectorAll(rowSelector)].filter(node => clean(caption(node)) === clean(wanted));
+      const tree = root.parentElement;
+      if (!tree || matching.length !== 1) return { valid: false };
+      const target = matching[0];
+      const checked = node => !node.matches('.indeterminate, [aria-checked="mixed"]') &&
+        (node.matches('.selected, [aria-checked="true"]') ||
+          [...node.querySelectorAll('input:checked, [aria-checked="true"]')].some(control =>
+            control.closest(rowSelector) === node && !control.indeterminate));
+      return { valid: true, selected: checked(target), other: [...tree.querySelectorAll(rowSelector)].some(node => node !== target && checked(node)) };
+    }, category);
+  };
   const initial = await selection();
   if (!initial.valid || initial.other) throw new Error('I controlli di categoria non sono verificabili o ci sono altri settori selezionati.');
   if (initial.selected) await label.click();
@@ -227,9 +243,12 @@ async function chooseCategory() {
 }
 
 async function main() {
-  const [choice, ...extra] = process.argv.slice(2);
-  if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria]');
+  const args = process.argv.slice(2);
+  const dryRun = args.includes('--solo-verifica');
+  const [choice, ...extra] = args.filter(arg => arg !== '--solo-verifica');
+  if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria] [--solo-verifica]');
   const category = choice === undefined ? await chooseCategory() : categoryChoice(choice);
+  if (dryRun && !category) throw new Error('Per la verifica scegli una sottocategoria diversa da 0.');
   const publisher = '3150312';
   const local = path.join(__dirname, 'LISTINI');
   const working = fs.mkdtempSync(path.join(os.tmpdir(), 'scala-awin-'));
@@ -241,9 +260,10 @@ async function main() {
     if (category) {
       fs.mkdirSync(staging);
       await downloadScript('a4bf3cc0ebecadc7450c6180d42a2d2af6407bc2', 'scarica-listini-awin.cjs', downloadPath, category);
-      console.log('Scarico i listini Awin degli advertiser attivi: ' + category);
+      console.log((dryRun ? 'Verifico il filtro Awin: ' : 'Scarico i listini Awin degli advertiser attivi: ') + category);
       try {
-        run(process.execPath, [downloadPath, publisher], { env: { ...process.env, AWIN_LISTINI_DIR: staging } });
+        run(process.execPath, [downloadPath, publisher], { env: { ...process.env, AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '' } });
+        if (dryRun) return;
         const destination = path.join(local, category);
         const count = keepLocalFeeds(staging, destination);
         console.log('Listini aggiornati: ' + count + ' | ' + destination);

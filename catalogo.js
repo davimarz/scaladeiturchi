@@ -10,7 +10,10 @@ const price = value => Number(String(value ?? '').replace(',', '.'));
 let manifest, pages, pending, offset, controller, revision = 0, timer;
 
 async function json(file, signal) {
-  const response = await fetch('./catalogo/' + file, { signal, ...(file === 'indice.json' ? { cache: 'no-cache' } : {}) });
+  // The index changes on every publish; hashed product blocks can stay cached.
+  const index = file === 'indice.json';
+  const url = './catalogo/' + file + (index ? '?aggiornamento=' + Date.now() : '');
+  const response = await fetch(url, { signal, ...(index ? { cache: 'no-store' } : {}) });
   if (!response.ok) throw new Error('Catalogo non disponibile');
   return response.json();
 }
@@ -65,8 +68,13 @@ async function load() {
     grid.append(fragment);
     more.hidden = !pending.length && offset >= pages.length;
     more.textContent = grid.children.length ? 'Mostra altre offerte' : 'Cerca nei prossimi prodotti';
+    if (!manifest.count) {
+      more.textContent = 'Riprova';
+      more.hidden = false;
+    }
     statusNode.textContent = grid.children.length ? grid.children.length + ' offerte mostrate'
-      : more.hidden ? (manifest.count ? 'Nessuna offerta corrispondente.' : 'Il catalogo Awin non è stato ancora pubblicato.')
+      : !manifest.count ? 'Il catalogo non contiene ancora offerte. Riprova tra poco.'
+        : more.hidden ? 'Nessuna offerta corrispondente.'
         : 'Nessuna corrispondenza nei prodotti controllati finora.';
   } catch (error) {
     if (revision !== current || signal.aborted) return;
@@ -98,7 +106,7 @@ function start() {
     more.hidden = false;
   });
 }
-more.addEventListener('click', () => manifest ? load() : start());
+more.addEventListener('click', () => manifest?.count ? load() : start());
 category.addEventListener('change', () => { if (manifest) reset(); });
 search.addEventListener('input', () => {
   clearTimeout(timer);

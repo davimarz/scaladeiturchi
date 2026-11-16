@@ -43,7 +43,8 @@ async function downloadScript(revision, name, destination, category) {
   if (script.split(summary).length !== 2) throw new Error('Versione dello scaricatore Awin non riconosciuta.');
   const hook = 'const active = await readJoinedAdvertisers(page);';
   if (script.split(hook).length !== 2) throw new Error('Punto di selezione categoria Awin non riconosciuto.');
-  script = script.replace(hook, () => 'const active = await (' + readCategoryAdvertisers.toString() + ')(page, ' + JSON.stringify(category) + ').catch(error => { console.error(error.message); throw error; });');
+  script = script.replace(hook, () => 'let active; try { active = await (' + readCategoryAdvertisers.toString() +
+    ')(page, ' + JSON.stringify(category) + '); } catch (error) { console.error("Awin | " + error.message); process.exitCode = 1; return; }');
   // The shared downloader can exit successfully with only part of the batch.
   fs.writeFileSync(destination, script.replace(summary, summary +
     '\n    if (completed !== targets.length) process.exitCode = 1;'), { flag: 'wx' });
@@ -112,17 +113,33 @@ async function verifyOnline(repo) {
 async function readCategoryAdvertisers(page, category) {
   const sector = page.getByText('Retail & Shopping', { exact: true }).filter({ visible: true });
   await sector.waitFor();
-  const branch = sector.locator('xpath=ancestor-or-self::li[./ul][1]');
-  const label = branch.getByText(category, { exact: true });
-  if (!await label.isVisible()) {
-    const toggle = branch.locator(':scope > .hitarea, :scope > [aria-expanded="false"]').filter({ visible: true });
-    if (await toggle.count() !== 1) throw new Error('Ramo Retail & Shopping non apribile.');
-    await toggle.click();
-  }
-  await label.waitFor();
-  const item = label.locator('xpath=ancestor-or-self::li[contains(concat(" ", normalize-space(@class), " "), " checkbox ")][1]');
-  const checked = () => item.evaluate(node => node.classList.contains('selected') ||
+  const branch = sector.locator('xpath=ancestor-or-self::li[./ul or ./*[contains(concat(" ", normalize-space(@class), " "), " hitarea ")]][1]');
+  const label = branch.getByText(category, { exact: true }).filter({ visible: true });
+  const filterItem = text => text.locator('xpath=ancestor-or-self::li[contains(concat(" ", normalize-space(@class), " "), " checkbox ")][1]');
+  const isChecked = locator => locator.evaluate(node => node.classList.contains('selected') ||
     Boolean(node.querySelector(':scope > input:checked, :scope > [aria-checked="true"]')));
+  if (!await label.isVisible()) {
+    const toggle = branch.locator('xpath=./*[contains(concat(" ", normalize-space(@class), " "), " hitarea ") or @aria-expanded="false"]')
+      .filter({ visible: true });
+    if (await toggle.count() === 1) {
+      await toggle.click();
+    } else {
+      const parent = filterItem(sector);
+      if (await parent.count() !== 1) throw new Error('Controllo Retail & Shopping non riconosciuto.');
+      if (await isChecked(parent)) throw new Error('Retail & Shopping è già selezionato per intero: apri il ramo e lascia selezionata solo ' + category + '.');
+      await sector.click();
+      if (await isChecked(parent)) {
+        await sector.click();
+        await parent.and(page.locator(':not(.selected)')).waitFor();
+        if (await isChecked(parent)) throw new Error('Impossibile deselezionare l’intero settore Retail & Shopping.');
+      }
+    }
+  }
+  await label.waitFor({ timeout: 7000 }).catch(() => {
+    throw new Error('La sottocategoria «' + category + '» non è visibile dopo l’apertura di Retail & Shopping.');
+  });
+  const item = filterItem(label);
+  const checked = () => isChecked(item);
   if (!await checked()) {
     const before = await page.evaluate(inspectPersonalAdvertisers, false);
     await label.click();

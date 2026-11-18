@@ -515,27 +515,29 @@ async function runCategory(category, attempted) {
 
 function parseCategoryChoice(value) {
   const input = value.trim();
-  if (!/^(?:0|[1-9]\d*)$/.test(input)) return null;
-  const number = Number(input);
-  return number === 0 ? categories : number <= categories.length ? [categories[number - 1]] : null;
+  if (input === '0') return categories;
+  if (!/^[1-9]\d*(?:(?:\s*,\s*|\s+)[1-9]\d*)*$/.test(input)) return null;
+  const numbers = [...new Set(input.split(/[,\s]+/).map(Number))];
+  if (numbers.some(number => number > categories.length)) return null;
+  return numbers.map(number => categories[number - 1]);
 }
 
 async function chooseCategories(value) {
   if (value !== undefined) {
     const chosen = parseCategoryChoice(value);
-    if (!chosen) throw new Error('Scegli un numero da 0 a ' + categories.length + '.');
+    if (!chosen) throw new Error('Inserisci numeri da 1 a ' + categories.length + ', separati da virgola o spazio, oppure 0.');
     return chosen;
   }
   console.log('\nRetail & Shopping\n0. Tutte le sottocategorie');
   categories.forEach((category, index) => console.log((index + 1) + '. ' + category));
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
-  prompt.setPrompt('Inserisci il numero della sottocategoria: ');
+  prompt.setPrompt('Inserisci i numeri delle sottocategorie (es. 7, 16, 36): ');
   try {
     prompt.prompt();
     for await (const line of prompt) {
       const chosen = parseCategoryChoice(line);
       if (chosen) return chosen;
-      console.log('Numero non valido. Scegli da 0 a ' + categories.length + '.');
+      console.log('Scelta non valida. Usa numeri da 1 a ' + categories.length + ', separati da virgola o spazio, oppure 0.');
       prompt.prompt();
     }
     throw new Error('Nessuna sottocategoria selezionata.');

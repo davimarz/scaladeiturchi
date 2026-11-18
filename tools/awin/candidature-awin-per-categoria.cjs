@@ -469,21 +469,14 @@ async function runPass(confirmed, category, attempted) {
         if (!await acknowledgeSubmission(page)) {
           throw new Error('Ricevuta Awin non riconosciuta.');
         }
-        confirmed.add(name);
-        await fs.appendFile(attemptsFile, JSON.stringify({ name, category, status: 'confermato', at: new Date().toISOString() }) + '\n');
       } catch (error) {
-        const detail = name + ' | ' + error.message + ' Controlla «In attesa». Il tentativo è registrato per evitare il reinvio.';
-        console.error(detail);
-        console.log('Candidature confermate in questa esecuzione: ' + confirmed.size);
-        if (process.stdin.isTTY && !page.isClosed()) {
-          console.log('Il browser resta aperto per 2 minuti. Premi Invio per chiudere.');
-          const inspection = createInterface({ input: process.stdin });
-          const timer = setTimeout(() => inspection.close(), 120000);
-          try { for await (const line of inspection) break; }
-          finally { clearTimeout(timer); inspection.close(); }
-        }
-        throw new Error(detail);
+        const detail = name + ' | ' + error.message + ' Controlla «In attesa». Il tentativo è registrato: nessun reinvio.';
+        console.warn(detail);
+        // The form may still be open. Start a clean pass instead of clicking through it.
+        return { submitted, skipped, uncertain: name };
       }
+      await fs.appendFile(attemptsFile, JSON.stringify({ name, category, status: 'confermato', at: new Date().toISOString() }) + '\n');
+      confirmed.add(name);
       submitted++;
       console.log(name + ' | richiesta inviata, ricevuta Awin verificata');
     }
@@ -496,14 +489,17 @@ async function runPass(confirmed, category, attempted) {
 
 async function runCategory(category, attempted) {
   const confirmed = new Set();
+  const uncertainNames = new Set();
   for (;;) {
-    const { submitted, skipped } = await runPass(confirmed, category, attempted);
-    if (submitted) {
+    const { submitted, skipped, uncertain } = await runPass(confirmed, category, attempted);
+    if (uncertain) uncertainNames.add(uncertain);
+    if (submitted || uncertain) {
       console.log('Awin | ricontrollo dalla prima pagina: i risultati possono essersi spostati dopo gli invii.');
       continue;
     }
     console.log('Totale candidature confermate: ' + confirmed.size);
-    if (skipped) {
+    if (uncertainNames.size) console.warn('Ricevute da verificare in «In attesa»: ' + [...uncertainNames].join(', '));
+    if (skipped || uncertainNames.size) {
       console.log('Scansione terminata. Advertiser da verificare manualmente: ' + skipped);
       process.exitCode = 2;
     } else {

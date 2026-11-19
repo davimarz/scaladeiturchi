@@ -3,37 +3,59 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Offerte dei negozi partner Awin selezionate da Scala dei Turchi.">
-  <title>Scala dei Turchi | Offerte Awin</title>
-  <link rel="stylesheet" href="./stile.css?v=4">
-  <script src="./catalogo.js?v=7" defer></script>
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="Scopri e confronta le offerte dei negozi partner su Scala dei Turchi.">
+  <title>Scala dei Turchi · Promozioni</title>
+  <link rel="stylesheet" href="./stile.css?v=promozioni-1">
+  <script src="./catalogo.js?v=promozioni-1" defer></script>
 </head>
 <body>
-  <header id="inizio" tabindex="-1"><span>SCALA DEI TURCHI</span><h1>Offerte da scoprire, con un tocco di Sicilia.</h1><p>Confronta le offerte dei negozi partner.</p></header>
-  <main>
-    <div class="filtri">
-      <label>Cerca prodotto o marca <input id="cerca" type="search" maxlength="120"></label>
-      <label>Categoria <select id="categoria"><option value="">Tutte le categorie</option></select></label>
-      <label>Venditore <select id="venditore" disabled><option value="">Tutti i venditori</option></select></label>
-    </div>
-    <div class="filtri filtri-offerte" aria-label="Filtri delle offerte">
-      <label>Prezzo minimo (€) <input id="prezzo-minimo" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Nessun minimo"></label>
-      <label>Prezzo massimo (€) <input id="prezzo-massimo" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Nessun massimo"></label>
-      <label>Ordinamento <select id="ordinamento">
-        <option value="">Sconti maggiori, poi prezzo crescente</option>
-        <option value="name">Nome (A–Z)</option>
-        <option value="price-asc">Prezzo crescente</option>
-        <option value="price-desc">Prezzo decrescente</option>
-      </select></label>
-      <button id="solo-sconti" type="button" aria-pressed="false">Solo sconti</button>
-    </div>
-    <p id="stato" role="status">Caricamento del catalogo…</p>
-    <div id="offerte" class="offerte"></div>
-    <div class="azioni-catalogo">
-      <button id="altre" type="button" hidden>Mostra altre offerte</button>
-      <a class="torna-inizio" href="#inizio">Torna all’inizio</a>
-    </div>
+  <a class="skip-link" href="#promozioni">Vai alle promozioni</a>
+  <header id="inizio" tabindex="-1">
+    <a class="brand" href="./" aria-label="Scala dei Turchi, pagina iniziale">
+      <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path d="M8 44h12V34h12V24h12V14h12M8 52h48" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="miter"/></svg>
+      <span><strong>Scala dei Turchi</strong><small>Offerte da scoprire, con un tocco di Sicilia.</small></span>
+    </a>
+  </header>
+  <main id="promozioni">
+    <section aria-labelledby="promotionsHeading">
+      <div class="section-heading">
+        <h1 id="promotionsHeading">Promozioni</h1>
+        <p>Link affiliati · Verifica prezzo e disponibilità sul sito del venditore.</p>
+      </div>
+      <details class="promotion-sort-box" open>
+        <summary>Filtra e ordina le offerte</summary>
+        <div class="promotion-sort-controls">
+          <label class="promotion-search-label">Cerca offerte
+            <input id="cerca" type="search" maxlength="120" placeholder="Ricerca con testo libero" autocomplete="off" aria-controls="offerte">
+          </label>
+          <label>Categoria <select id="categoria"><option value="">Tutte le categorie</option></select></label>
+          <label>Venditore <select id="venditore" disabled><option value="">Tutti i venditori</option></select></label>
+          <label>Prezzo minimo (€) <input id="prezzo-minimo" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Nessun minimo"></label>
+          <label>Prezzo massimo (€) <input id="prezzo-massimo" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Nessun massimo"></label>
+          <label class="sort-label">Ordinamento <select id="ordinamento">
+            <option value="">Sconto maggiore</option>
+            <option value="price-asc">Prezzo crescente</option>
+            <option value="price-desc">Prezzo decrescente</option>
+            <option value="name">Nome (A–Z)</option>
+          </select></label>
+        </div>
+      </details>
+      <div class="promotion-filters" role="group" aria-label="Filtra le promozioni per sconto e prezzo">
+        <button type="button" data-price-band="all" aria-pressed="true">Tutti</button>
+        <button type="button" data-price-band="discounted" id="solo-sconti" aria-pressed="false">Solo scontati</button>
+        <button type="button" data-price-band="low" aria-pressed="false">0–50 €</button>
+        <button type="button" data-price-band="mid" aria-pressed="false">50–150 €</button>
+        <button type="button" data-price-band="high" aria-pressed="false">Oltre 150 €</button>
+      </div>
+      <div class="promotion-result-bar"><p id="stato" role="status">Caricamento delle promozioni…</p><button type="button" id="azzera-filtri" hidden>Azzera filtri</button></div>
+      <div id="offerte" class="offerte" aria-label="Prodotti in promozione" aria-busy="true"></div>
+      <div class="azioni-catalogo">
+        <button id="altre" type="button" hidden>Mostra altri prodotti</button>
+        <a class="torna-inizio" href="#inizio">Torna all’inizio</a>
+      </div>
+    </section>
   </main>
-  <footer>I link sono affiliati: Scala dei Turchi può ricevere una commissione. Prezzi e disponibilità vanno confermati sul sito del negozio. <a href="./privacy.html">Privacy</a> · <a href="./cookie.html">Cookie</a></footer>
+  <footer><p>realizzato da Davide Marziano</p><p>Alcuni link commerciali sono affiliati: un acquisto può generare una commissione senza costi aggiuntivi.</p><div><a href="./privacy.html">Privacy</a><a href="./cookie.html">Cookie e tecnologie locali</a></div></footer>
 </body>
 </html>

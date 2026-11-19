@@ -132,6 +132,27 @@ async function readAllPersonalAdvertisers(page) {
   }
 }
 
+async function feedFingerprint(filename) {
+  const hash = require('node:crypto').createHash('sha256');
+  for await (const chunk of require('node:fs').createReadStream(filename)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+async function publishedFeedHashes() {
+  try {
+    const response = await fetch(new URL('catalogo/indice.json', publicSite), {
+      cache: 'no-store', signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) return [];
+    const index = await response.json();
+    return Array.isArray(index.importedFeedHashes)
+      ? index.importedFeedHashes.filter(hash => typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 async function downloadScript(revision, name, destination, category) {
   const response = await fetch(rawBase + revision + '/tools/awin/' + name, {
     redirect: 'error',
@@ -167,12 +188,15 @@ async function downloadScript(revision, name, destination, category) {
   const end = script.indexOf(saveEnd, start);
   const loopStart = '    let completed = 0;\n    for (const name of targets) {';
   if (script.split(loopStart).length !== 2) throw new Error('Contatore dei listini Awin non riconosciuto.');
-  script = script.replace(loopStart, () => '    let skippedNoItalian = 0;\n' + loopStart + `
+  script = script.replace(loopStart, () => '    let skippedNoItalian = 0, current = 0;\n' + loopStart + `
+      const progress = ++current + '/' + targets.length + ' advertiser | ' + name;
+      scalaStatus(progress);
+
       try {
         const reused = await (` + reuseRecentFeed.toString() + `)(path.join(__dirname, 'LISTINI'), output,
           advertiserFilename(name), ` + feedExtension + `);
         if (reused) {
-          console.log(name + ' | listino già disponibile nelle ultime 24 ore: riutilizzato | ' + reused);
+          await scalaFeedStatus(path.basename(reused));
           completed++;
           continue;
         }
@@ -186,6 +210,9 @@ async function downloadScript(revision, name, destination, category) {
   }
   script = script.slice(0, start) + '  await saveScalaExport(exportFile, name, setStage);\n}\n\n' +
     'async function saveScalaExport(exportFile, name, setStage) {\n' + script.slice(start);
+  const saved = "    console.log(name + ' | scaricato | ' + file.size + ' byte | ' + filename);";
+  if (script.split(saved).length !== 2) throw new Error('Conferma del file Awin non riconosciuta.');
+  script = script.replace(saved, '    await scalaFeedStatus(filename);');
   script = script.replace(failure, () => `        if (stage === 'Attesa della riga del feed') {
           try {
             await open(page, '/datafeed/step-one');
@@ -207,32 +234,57 @@ async function downloadScript(revision, name, destination, category) {
           }
         }
 ` + failure);
-  // The shared downloader can exit successfully with only part of the batch.
-  fs.writeFileSync(destination, script.replace(summary, summary +
-    '\n    if (skippedNoItalian) console.warn("Advertiser saltati senza feed italiano: " + skippedNoItalian);' +
+  const quietOutput = `
+const scalaStatus = console.log.bind(console);
+const scalaError = console.error.bind(console);
+if (process.env.SCALA_AWIN_DETTAGLI !== '1') {
+  console.log = (...args) => { if (String(args[0]).includes(' | errore al passaggio')) scalaStatus(...args); };
+  console.warn = () => {};
+  console.error = message => scalaError(
+    /pagin|elenco incompleto/i.test(String(message))
+      ? 'Elenco incompleto: impossibile confermare tutti gli advertiser.'
+      : String(message).replace(/^Awin [|] /, '')
+  );
+}
+const scalaPublished = new Set(JSON.parse(process.env.SCALA_AWIN_HASH_PUBBLICATI || '[]'));
+let scalaUnchanged = 0;
+async function scalaFeedStatus(filename) {
+  const hash = await (` + feedFingerprint.toString() + `)(path.join(output, filename)).catch(() => null);
+  if (scalaPublished.has(hash)) {
+    scalaUnchanged++;
+    scalaStatus('  Identico al catalogo pubblicato.');
+  }
+}
+`;
+  fs.writeFileSync(destination, quietOutput + script.replace(summary,
+    '    scalaStatus("Listini disponibili: " + completed + "/" + targets.length + " | identici: " + scalaUnchanged + " | senza feed italiano: " + skippedNoItalian + " | errori: " + (targets.length - completed - skippedNoItalian));' +
     '\n    if (completed + skippedNoItalian !== targets.length) process.exitCode = 1;'), { flag: 'wx' });
   run(process.execPath, ['--check', destination]);
 }
 
-function keepLocalFeeds(staging, local) {
+async function keepLocalFeeds(staging, local) {
   const feeds = fs.readdirSync(staging, { withFileTypes: true }).filter(entry => entry.isFile());
   if (!feeds.length || feeds.some(entry => !feedExtension.test(entry.name))) {
     throw new Error('Scaricamento incompleto o formato non supportato. Sono attesi CSV, TSV, gzip o JSONL.');
   }
   fs.mkdirSync(local, { recursive: true });
+  let changed = 0;
   for (const { name } of feeds) {
     const temporary = path.join(local, '.' + randomUUID() + '.part');
     try {
       const source = path.join(staging, name);
+      const target = path.join(local, name);
+      if (fs.existsSync(target) && await feedFingerprint(source) === await feedFingerprint(target)) continue;
       const info = fs.statSync(source);
       fs.copyFileSync(source, temporary, fs.constants.COPYFILE_EXCL);
       fs.utimesSync(temporary, info.atime, info.mtime);
-      fs.renameSync(temporary, path.join(local, name));
+      fs.renameSync(temporary, target);
+      changed++;
     } finally {
       fs.rmSync(temporary, { force: true });
     }
   }
-  return feeds.length;
+  return changed;
 }
 
 function publish(repo) {
@@ -462,7 +514,9 @@ async function main() {
   const failures = [];
   let preserveWorking = false;
   let downloaded = 0;
+  let hasLocalResults = false;
   try {
+    const hashes = requestedCategories.length && !dryRun ? await publishedFeedHashes() : [];
     for (const [index, category] of requestedCategories.entries()) {
       const staging = path.join(working, 'listini', category);
       fs.mkdirSync(staging, { recursive: true });
@@ -472,7 +526,7 @@ async function main() {
         console.log((dryRun ? 'Verifico il filtro Awin: ' : 'Scarico i listini Awin degli advertiser attivi: ') + category);
         run(process.execPath, [downloadPath, publisher], {
           env: { ...process.env, AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '',
-            SCALA_AWIN_TUTTE: allCategories ? '1' : '' }
+            SCALA_AWIN_HASH_PUBBLICATI: JSON.stringify(hashes), SCALA_AWIN_TUTTE: allCategories ? '1' : '' }
         });
         if (dryRun) return;
         if (!fs.readdirSync(staging).length) {
@@ -481,14 +535,15 @@ async function main() {
           continue;
         }
         const destination = path.join(local, category);
-        const count = keepLocalFeeds(staging, destination);
+        const count = await keepLocalFeeds(staging, destination);
         downloaded += count;
+        hasLocalResults = true;
         console.log('Listini aggiornati: ' + count + ' | ' + destination);
       } catch (error) {
         if (personal && fs.readdirSync(staging).some(name => feedExtension.test(name))) {
           preserveWorking = true;
           const destination = path.join(local, category);
-          const count = keepLocalFeeds(staging, destination);
+          const count = await keepLocalFeeds(staging, destination);
           preserveWorking = false;
           console.warn('Listini disponibili salvati: ' + count + ' | ' + destination);
           console.warn('Scaricamento parziale. Controlla gli errori sopra e riprova; nessun aggiornamento pubblicato.');
@@ -512,7 +567,7 @@ async function main() {
     if (allCategories) {
       console.log('Listini salvati nelle cartelle di categoria: ' + downloaded);
       if (failures.length) console.warn('Categorie da riprovare: ' + failures.join(', '));
-      if (!downloaded) {
+      if (!hasLocalResults) {
         if (failures.length) process.exitCode = 1;
         return;
       }

@@ -1,32 +1,62 @@
+@font-face{font-family:Satoshi;src:url("https://davimarz.github.io/archivioscarpe/assets/fonts/Satoshi-Regular.ttf") format("truetype");font-weight:400;font-display:swap}
+@font-face{font-family:Satoshi;src:url("https://davimarz.github.io/archivioscarpe/assets/fonts/Satoshi-Bold.ttf") format("truetype");font-weight:500 900;font-display:swap}
+@font-face{font-family:"Clash Display";src:url("https://davimarz.github.io/archivioscarpe/assets/fonts/ClashDisplay-Bold.ttf") format("truetype");font-weight:700 900;font-display:swap}
+:root{color-scheme:light;--paper:#fff;--ink:#050505;--wash:#f4f4f4;--muted:#666;--rule:#d1d1d1;--accent:#ff6a00;--focus:#9a3900;--gutter:clamp(16px,3vw,24px)}
 *{box-sizing:border-box}
-body{margin:0;background:#f5f8fa;color:#153348;font:16px/1.5 system-ui,sans-serif}
-header{background:#103854;color:#fff;padding:clamp(1.5rem,6vw,4rem) max(1rem,calc((100% - 70rem)/2))}
-header span{font-size:.8rem;font-weight:800;letter-spacing:.14em}
-h1{margin:.4rem 0;font-size:clamp(1.7rem,5vw,3rem);line-height:1.12}
-header p{margin:.6rem 0 0}
-main,footer{max-width:72rem;margin:auto;padding:1rem}
-.filtri{display:flex;flex-wrap:wrap;gap:.75rem}
-label{flex:1 1 15rem;min-width:0;font-weight:650}
-input,select,button{min-height:44px;font:inherit;border:1px solid #9eafba;border-radius:.6rem;padding:.55rem .7rem}
-input,select{display:block;width:100%;margin-top:.25rem;background:white;color:inherit}
-.offerte{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,13rem),1fr));gap:.75rem}
-article{--scheda-spazio:.8rem;min-width:0;background:#fff;border:1px solid #d8e3e9;border-radius:.85rem;padding:0 var(--scheda-spazio) var(--scheda-spazio);display:flex;flex-direction:column;gap:.4rem;overflow-wrap:anywhere}
-article > img{display:block;flex:1 0 auto;width:calc(100% + var(--scheda-spazio) + var(--scheda-spazio));height:calc(9rem + var(--scheda-spazio));margin-inline:calc(0px - var(--scheda-spazio));object-fit:contain;border-radius:.8rem .8rem 0 0}
-article h2{font-size:1rem;line-height:1.35;margin:0}
-article p{margin:0} del{margin-left:.45rem;color:#516678}
-.sconto{font-weight:750;color:#9b3024}
-article a,button{background:#103854;color:white;border-radius:.6rem;font-weight:650}
-article a{margin-top:auto;padding:.6rem;min-height:44px;text-align:center;text-decoration:none}
-button{margin-top:1rem;cursor:pointer}
-:focus-visible{outline:3px solid #b55b21;outline-offset:3px}
-footer{font-size:.85rem;color:#40586a}
-@media(max-width:520px){.offerte{grid-template-columns:repeat(2,minmax(0,1fr))}article{--scheda-spazio:.6rem}article > img{height:calc(7rem + var(--scheda-spazio))}}
-
-.filtri-offerte{margin-top:.75rem;align-items:flex-end}
-#solo-sconti{margin:0;background:#fff;color:#103854}
-#solo-sconti[aria-pressed="true"]{background:#103854;color:#fff}
-
-.azioni-catalogo{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin-top:1rem}
-.azioni-catalogo button{margin:0}
-.torna-inizio{display:inline-flex;align-items:center;min-height:44px;padding:.55rem .7rem;border:1px solid #9eafba;border-radius:.6rem;background:#fff;color:#103854;font-weight:650;text-decoration:none}
-.torna-inizio:hover{background:#e8f0f5}
+[hidden]{display:none!important}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 Satoshi,Arial,sans-serif}
+header,main,footer{width:100%;max-width:1080px;margin-inline:auto}
+header{min-height:64px;padding:10px var(--gutter);border-bottom:2px solid var(--ink)}
+.brand{display:flex;align-items:center;gap:12px;width:fit-content;color:var(--ink);text-decoration:none}
+.brand-mark{width:66px;height:66px;flex-shrink:0}
+.brand strong{display:block;font:700 clamp(1.2rem,5.5vw,1.5rem)/1.2 "Clash Display",Satoshi,sans-serif}
+.brand small{display:block;color:var(--muted);font-size:12px;margin-top:3px}
+main{padding:18px var(--gutter)}
+section{display:grid;gap:16px}
+h1{font:700 20px/1.4 "Clash Display",Satoshi,sans-serif;margin:0}
+p{margin:0}
+.section-heading p,#stato{color:var(--muted);font-size:14px}
+.promotion-sort-box{border:1px solid #d9e3ee;background:var(--paper);padding:12px}
+summary{cursor:pointer;font-weight:800;min-height:24px}
+.promotion-sort-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding-top:10px}
+label{display:grid;gap:5px;color:var(--ink);font-size:12px;font-weight:700;min-width:0}
+.promotion-search-label,.sort-label{grid-column:1/-1}
+input,select,button{font:inherit;min-width:0;border-radius:0}
+input,select{width:100%;min-height:44px;background:var(--paper);color:var(--ink);border:2px solid var(--ink);padding:8px;font-size:16px;caret-color:var(--ink);-webkit-text-fill-color:currentColor}
+input::placeholder{color:var(--muted);opacity:1}
+#cerca{min-height:48px;padding:10px 12px}
+select option{background:var(--paper);color:var(--ink)}
+button,.torna-inizio{min-height:44px;padding:7px 12px;border:1px solid var(--ink);background:var(--paper);color:var(--ink);font-weight:700;cursor:pointer;touch-action:manipulation}
+.promotion-filters{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.promotion-filters button{padding:4px;font-size:12px}
+.promotion-filters button[aria-pressed="true"],#altre{background:var(--ink);color:var(--paper)}
+.promotion-result-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#azzera-filtri{font-size:14px}
+.offerte{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:stretch}
+.cisalfa-product-card{position:relative;display:flex;flex-direction:column;min-width:0;padding:8px;border:2px solid var(--ink);background:var(--paper);text-decoration:none;color:var(--ink);gap:5px}
+.product-photo-frame{width:100%;aspect-ratio:1;background:var(--paper);border-bottom:2px solid var(--ink);overflow:hidden}
+.product-photo-frame img{display:block;width:100%;height:100%;object-fit:contain}
+.cisalfa-product-name{font-size:12px;font-weight:600;line-height:1.3;min-height:3.9em;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.product-merchant{font-size:10px;font-weight:600}
+.cisalfa-product-price{font:700 20px/1.25 "Clash Display",Satoshi,sans-serif;color:var(--ink)}
+.awin-discount-badge{position:absolute;top:0;left:0;background:#a51c30;color:#fff;padding:5px 10px;font-size:15px;font-weight:800}
+.has-verified-discount .cisalfa-product-price{color:#a51c30}
+.awin-original-price{color:var(--muted);font-size:12px}
+.offer-cta{display:block;margin-top:auto;padding:8px 10px;min-height:36px;background:#284b3c;color:#fff;text-align:center;font-size:12px;font-weight:700}
+.azioni-catalogo{display:grid;gap:12px}
+#altre{width:100%;font-size:14px;padding:8px 16px}
+.torna-inizio{display:flex;align-items:center;justify-content:center;text-decoration:none;font-size:14px}
+button:hover,.torna-inizio:hover{filter:brightness(.95)}
+button:disabled{opacity:.6;cursor:wait}
+:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+footer{text-align:center;padding:20px var(--gutter) max(28px,env(safe-area-inset-bottom));border-top:1px solid var(--rule);color:var(--muted);font-size:12px}
+footer p+p{margin-top:8px}
+footer div{display:flex;flex-wrap:wrap;justify-content:center;gap:16px;margin-top:8px}
+footer a{color:inherit;min-height:44px;display:inline-flex;align-items:center}
+.skip-link{position:absolute;left:16px;top:-100px;z-index:10;background:#fff;color:#050505;padding:12px;border:2px solid #050505}
+.skip-link:focus{top:10px}
+@media(min-width:640px){.offerte{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:479px){.promotion-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.promotion-sort-controls{grid-template-columns:1fr}.brand-mark{width:52px;height:52px}}
+@media(max-width:390px){.offerte{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}

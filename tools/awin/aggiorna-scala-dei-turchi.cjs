@@ -92,6 +92,46 @@ async function reuseRecentFeed(root, destination, basename, supported, now = Dat
   }
 }
 
+async function readAllPersonalAdvertisers(page) {
+  const heading = page.getByText(/^Advertiser personali(?:\s*\(\s*\d+\s*\))?$/i)
+    .filter({ visible: true }).first();
+  await heading.waitFor({ timeout: 30000 });
+  const reset = page.getByText('Reimposta ricerca', { exact: true }).filter({ visible: true });
+  if (await reset.count() !== 1) throw new Error('Impossibile azzerare i filtri degli advertiser.');
+  await reset.click();
+  await heading.waitFor({ timeout: 20000 });
+  const zero = page.getByText(/^Advertiser personali\s*\(\s*0\s*\)$/i).filter({ visible: true });
+  const nextText = /^(?:pagina )?successiv[ao](?:\s*[›»])?$/i;
+  const next = page.getByRole('link', { name: nextText }).or(page.getByRole('button', { name: nextText }))
+    .or(page.getByText(nextText)).filter({ visible: true }).first();
+  const names = new Set();
+  let expected, previous;
+  for (let number = 1; ; number++) {
+    const until = Date.now() + 25000;
+    let current, signature, since;
+    while (Date.now() < until) {
+      const rows = await zero.isVisible() ? { names: [], total: 0 } : await page.evaluate(inspectPersonalAdvertisers, false);
+      const key = JSON.stringify(rows.names);
+      if (!Array.isArray(rows.names) || !Number.isSafeInteger(rows.total) ||
+          (expected !== undefined && rows.total !== expected) || key === previous) signature = undefined;
+      else if (signature !== key) { signature = key; since = Date.now(); }
+      else if (Date.now() - since >= 1200) { current = rows; break; }
+      await page.waitForTimeout(250);
+    }
+    if (!current) throw new Error('Pagina ' + number + ' degli advertiser personali non verificabile.');
+    expected = current.total;
+    previous = JSON.stringify(current.names);
+    const before = names.size;
+    for (const name of current.names) names.add(name);
+    console.log('Awin | Advertiser personali: ' + names.size + ' di ' + expected + ' | pagina ' + number);
+    if (names.size === expected) return { joined: [...names], targets: [...names] };
+    if (names.size > expected || names.size === before || !await next.isVisible() || !await next.isEnabled()) {
+      throw new Error('Elenco incompleto: ' + names.size + ' di ' + expected + ' advertiser personali.');
+    }
+    await next.click();
+  }
+}
+
 async function downloadScript(revision, name, destination, category) {
   const response = await fetch(rawBase + revision + '/tools/awin/' + name, {
     redirect: 'error',
@@ -105,12 +145,12 @@ async function downloadScript(revision, name, destination, category) {
   if (script.split(hook).length !== 2) throw new Error('Punto di selezione categoria Awin non riconosciuto.');
   const requestHook = 'const requested = process.argv.slice(3).map(name => name.trim().toLowerCase());';
   if (script.split(requestHook).length !== 2) throw new Error('Punto di selezione dei listini Awin non riconosciuto.');
-  script = script.replace(hook, () => 'let selection; try { selection = await (' + readCategoryAdvertisers.toString() +
+  script = script.replace(hook, () => 'let selection; try { selection = await (' + (category === null ? readAllPersonalAdvertisers : readCategoryAdvertisers).toString() +
     ')(page, ' + JSON.stringify(category) + ', ' + JSON.stringify(categories) + '); } catch (error) { console.error("Awin | " + error.message); process.exitCode = 1; return; }' +
     ' const active = selection.joined;' +
-    ' console.log("Awin | Iscritto / " + ' + JSON.stringify(category) + ' + ": " + (selection.targets.join(", ") || "nessun advertiser"));' +
+    ' console.log("Awin | Iscritto / " + ' + JSON.stringify(category ?? 'Advertiser personali') + ' + ": " + (selection.targets.join(", ") || "nessun advertiser"));' +
     ' if (process.env.SCALA_AWIN_SOLO_VERIFICA === "1") return;' +
-    ' if (!selection.targets.length) { console.log("Nessun advertiser iscritto nella sottocategoria."); return; }')
+    ' if (!selection.targets.length) { console.log("Nessun advertiser iscritto da elaborare."); return; }')
     .replace(requestHook, 'const requested = selection.targets.map(name => name.trim().toLowerCase());');
   const listedStart = '    if (links.length !== 1) {';
   const listedEnd = '    return links[0];';
@@ -380,15 +420,17 @@ async function readCategoryAdvertisers(page, category, categoryNames) {
 function categoryChoice(input) {
   const number = input.trim();
   if (number === '0') return null;
+  if (number.toLowerCase() === 'p') return 'personali';
   if (number.toLowerCase() === 'l') return 'locale';
   if (!/^[1-9]\d*$/.test(number) || Number(number) > categories.length) {
-    throw new Error('Scegli un numero da 0 a ' + categories.length + ' oppure L.');
+    throw new Error('Scegli un numero da 0 a ' + categories.length + ' oppure P o L.');
   }
   return categories[Number(number) - 1];
 }
 
 async function chooseCategory() {
   console.log('0. Scarica i listini degli iscritti in tutte le sottocategorie');
+  console.log('P. Scarica tutti gli advertiser personali senza pubblicare');
   console.log('L. Aggiorna solo dai listini già salvati');
   categories.forEach((name, i) => console.log((i + 1) + '. ' + name));
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
@@ -397,19 +439,21 @@ async function chooseCategory() {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
+  const args = process.argv.slice(2).map(arg => arg === '--tutti-iscritti' ? 'P' : arg);
   const dryRun = args.includes('--solo-verifica');
   const skipEmpty = args.includes('--salta-listini-vuoti');
   const localFlag = args.includes('--solo-locali');
   const [choice, ...extra] = args.filter(arg => !['--solo-verifica', '--salta-listini-vuoti', '--solo-locali'].includes(arg));
-  if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria | L | --solo-locali] [--solo-verifica | --salta-listini-vuoti]');
+  if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria | P | --tutti-iscritti | L | --solo-locali] [--solo-verifica | --salta-listini-vuoti]');
   const selection = choice === undefined && (localFlag || skipEmpty) ? 'locale'
     : choice === undefined ? await chooseCategory() : categoryChoice(choice);
   const localOnly = selection === 'locale' || localFlag || (selection === null && skipEmpty);
   if (localOnly && selection !== null && selection !== 'locale') throw new Error('Usa --solo-locali senza un numero di sottocategoria.');
+  const personal = selection === 'personali';
+  if (personal && skipEmpty) throw new Error('Per scaricare gli advertiser personali usa P senza --salta-listini-vuoti.');
   const allCategories = selection === null && !localOnly;
   if (dryRun && (localOnly || allCategories)) throw new Error('Per la verifica scegli una sottocategoria diversa da 0.');
-  const requestedCategories = localOnly ? [] : allCategories ? categories : [selection];
+  const requestedCategories = localOnly ? [] : allCategories ? categories : [personal ? 'Advertiser personali' : selection];
   const publisher = '3150312';
   const local = path.join(__dirname, 'LISTINI');
   const working = fs.mkdtempSync(path.join(os.tmpdir(), 'scala-awin-'));
@@ -424,7 +468,7 @@ async function main() {
       fs.mkdirSync(staging, { recursive: true });
       if (allCategories) console.log('Categoria ' + (index + 1) + '/' + requestedCategories.length + ': ' + category);
       try {
-        await downloadScript('a4bf3cc0ebecadc7450c6180d42a2d2af6407bc2', 'scarica-listini-awin.cjs', downloadPath, category);
+        await downloadScript('a4bf3cc0ebecadc7450c6180d42a2d2af6407bc2', 'scarica-listini-awin.cjs', downloadPath, personal ? null : category);
         console.log((dryRun ? 'Verifico il filtro Awin: ' : 'Scarico i listini Awin degli advertiser attivi: ') + category);
         run(process.execPath, [downloadPath, publisher], {
           env: { ...process.env, AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '',
@@ -441,6 +485,15 @@ async function main() {
         downloaded += count;
         console.log('Listini aggiornati: ' + count + ' | ' + destination);
       } catch (error) {
+        if (personal && fs.readdirSync(staging).some(name => feedExtension.test(name))) {
+          preserveWorking = true;
+          const destination = path.join(local, category);
+          const count = keepLocalFeeds(staging, destination);
+          preserveWorking = false;
+          console.warn('Listini disponibili salvati: ' + count + ' | ' + destination);
+          console.warn('Scaricamento parziale. Controlla gli errori sopra e riprova; nessun aggiornamento pubblicato.');
+          throw error;
+        }
         if (fs.readdirSync(staging).some(name => feedExtension.test(name))) {
           preserveWorking = true;
           console.error('Download incompleto. Listini parziali conservati qui: ' + staging);
@@ -451,6 +504,10 @@ async function main() {
       } finally {
         fs.rmSync(downloadPath, { force: true });
       }
+    }
+    if (personal) {
+      console.log('Scaricamento terminato. Nessun aggiornamento pubblicato.');
+      return;
     }
     if (allCategories) {
       console.log('Listini salvati nelle cartelle di categoria: ' + downloaded);

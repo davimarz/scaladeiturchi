@@ -255,9 +255,24 @@ function main(repo, directory, publisher) {
   let totalValid = 0;
   const models = new Map();
   const seenFeeds = new Map();
+  const importedFeedHashes = [];
   const hashBuffer = Buffer.allocUnsafe(256 * 1024);
-  for (const filename of feeds) {
-    const digest = feedDigest(filename, hashBuffer);
+  const candidates = feeds.map(filename => [filename, feedDigest(filename, hashBuffer)]);
+  const importerHash = feedDigest(__filename, hashBuffer);
+  const currentHashes = [...new Set(candidates.map(([, digest]) => digest))].sort();
+  try {
+    const previous = JSON.parse(fs.readFileSync(path.join(repo, 'catalogo', 'indice.json'), 'utf8'));
+    if (previous.importerHash === importerHash && previous.importedPublisher === publisher &&
+        JSON.stringify(previous.importedFeedHashes) === JSON.stringify(currentHashes) &&
+        previous.pages?.length && previous.pages.every(({ file }) =>
+          /^[a-f0-9]{64}\.json$/.test(file) && fs.existsSync(path.join(repo, 'catalogo', file)))) {
+      console.log('Listini identici al catalogo: importazione saltata.');
+      return;
+    }
+  } catch {
+    // An old or missing index requires a full import.
+  }
+  for (const [filename, digest] of candidates) {
     if (seenFeeds.has(digest)) {
       console.log(path.relative(directory, filename) + ': copia identica di ' +
         path.relative(directory, seenFeeds.get(digest)) + '; salto la seconda importazione.');
@@ -292,6 +307,7 @@ function main(repo, directory, publisher) {
       console.warn('Listino escluso: ' + issue);
       continue;
     }
+    importedFeedHashes.push(digest);
     totalValid += valid;
     console.log(path.relative(directory, filename) + ': ' + valid + ' offerte valide; ' + invalid + ' righe malformate.');
   }
@@ -313,7 +329,7 @@ function main(repo, directory, publisher) {
       });
     }
     const manifest = {
-      count: products.length, pages, categories: [...new Set(products.map(item => item.category))].sort(),
+      count: products.length, importerHash, importedPublisher: publisher, importedFeedHashes: importedFeedHashes.sort(), pages, categories: [...new Set(products.map(item => item.category))].sort(),
       merchants: [...new Set(pages.flatMap(page => page.merchants))].sort()
     };
     fs.writeFileSync(path.join(staging, 'indice.json'), JSON.stringify(manifest) + '\n');

@@ -11,6 +11,9 @@ const sortOrder = document.getElementById('ordinamento');
 const discountOnly = document.getElementById('solo-sconti');
 const collator = new Intl.Collator('it', { sensitivity: 'base', numeric: true });
 const blocks = new Map();
+const resetButton = document.getElementById('azzera-filtri');
+const priceButtons = [...document.querySelectorAll('[data-price-band]')];
+let activeBand = 'all';
 const euro = new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR' });
 const normalize = value => value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
@@ -134,26 +137,31 @@ function loadPhoto(image, source) {
 }
 
 function card(item, parent) {
-  const article = element('article', '', parent);
-  const image = element('img', '', article);
+  const article = element('a', '', parent);
+  article.className = 'cisalfa-product-card';
+  article.href = item.url;
+  article.target = '_blank';
+  article.rel = 'sponsored noopener noreferrer';
+  article.setAttribute('aria-label', item.name + ' · ' + euro.format(price(item.price)) + ' · Vedi l’offerta da ' + item.merchant);
+  const frame = element('div', '', article);
+  frame.className = 'product-photo-frame';
+  const image = element('img', '', frame);
   image.alt = '';
   image.loading = 'lazy';
   image.decoding = 'async';
   loadPhoto(image, item.image);
-  element('h2', item.name, article);
-  element('p', item.merchant, article);
-  const value = element('p', '', article);
-  element('strong', euro.format(price(item.price)), value);
-  const original = price(item.originalPrice);
+  element('span', item.merchant, article).className = 'product-merchant';
+  element('span', item.name, article).className = 'cisalfa-product-name';
   if (onSale(item)) {
-    element('del', euro.format(original), value);
-    element('span', ' −' + Math.round(100 * (1 - price(item.price) / original)) + '%', value).className = 'sconto';
+    article.classList.add('has-verified-discount');
+    const percent = Math.round(100 * (1 - price(item.price) / price(item.originalPrice)));
+    const badge = element('span', '−' + percent + '%', article);
+    badge.className = 'awin-discount-badge';
+    badge.setAttribute('aria-label', 'Sconto del ' + percent + ' per cento');
+    element('del', euro.format(price(item.originalPrice)), article).className = 'awin-original-price';
   }
-  const link = element('a', 'Vedi offerta', article);
-  link.href = item.url;
-  link.target = '_blank';
-  link.rel = 'sponsored noopener noreferrer';
-  link.setAttribute('aria-label', 'Vedi offerta: ' + item.name);
+  element('strong', euro.format(price(item.price)), article).className = 'cisalfa-product-price';
+  element('span', 'Vedi l’offerta', article).className = 'offer-cta';
 }
 function onSale(item) {
   return price(item.price) > 0 && price(item.originalPrice) > price(item.price);
@@ -170,13 +178,15 @@ async function load() {
   loading = current;
   const signal = controller.signal;
   more.hidden = true;
-  statusNode.textContent = 'Caricamento offerte…';
+  statusNode.textContent = 'Caricamento delle promozioni…';
+  grid.setAttribute('aria-busy', 'true');
   const terms = normalize(search.value.trim()).split(/\s+/).filter(Boolean);
   const selected = category.value;
   const seller = merchant.value;
   if (!minPrice.validity.valid || !maxPrice.validity.valid) {
     statusNode.textContent = 'Inserisci prezzi validi, da 0 € in su, con al massimo due decimali.';
     loading = undefined;
+    grid.setAttribute('aria-busy', 'false');
     return;
   }
   const lower = minPrice.value === '' ? 0 : minPrice.valueAsNumber;
@@ -190,7 +200,7 @@ async function load() {
   const discounted = discountOnly.getAttribute('aria-pressed') === 'true';
   const order = sortOrder.value;
   const matches = item => (!seller || item.merchant === seller) && (!selected || selected === categoryFamily(item.category)) &&
-    price(item.price) >= lower && price(item.price) <= upper && (!discounted || onSale(item)) &&
+    price(item.price) >= lower && price(item.price) <= upper && (!(activeBand === 'mid' || activeBand === 'high') || price(item.price) > lower) && (!discounted || onSale(item)) &&
     terms.every(term => normalize([item.name, item.brand, item.merchant].join(' ')).includes(term));
   try {
     // An explicit sort must see all results before showing the first page.
@@ -212,7 +222,7 @@ async function load() {
       ordered = true;
     }
     let reads = 0;
-    while (!order && pending.length < 24 && offset < pages.length &&
+    while (!order && pending.length < 6 && offset < pages.length &&
       (reads < 4 || discounted || priceFilter || seller)) {
       const size = discounted || priceFilter || seller ? 4 : 1;
       const next = await Promise.all(pages.slice(offset, offset + size).map(page => productBlock(page.file, signal)));
@@ -222,15 +232,15 @@ async function load() {
       for (const rows of next) for (const item of rows) if (matches(item)) pending.push(item);
     }
     const fragment = document.createDocumentFragment();
-    pending.splice(0, 24).forEach(item => card(item, fragment));
+    pending.splice(0, 6).forEach(item => card(item, fragment));
     grid.append(fragment);
     more.hidden = !pending.length && offset >= pages.length;
-    more.textContent = grid.children.length ? 'Mostra altre offerte' : 'Cerca nei prossimi prodotti';
+    more.textContent = grid.children.length ? 'Mostra altri prodotti' : 'Cerca nei prossimi prodotti';
     if (!manifest.count) {
       more.textContent = 'Riprova';
       more.hidden = false;
     }
-    statusNode.textContent = grid.children.length ? grid.children.length + ' offerte mostrate'
+    statusNode.textContent = grid.children.length ? grid.children.length + ' prodotti mostrati' + (offset >= pages.length ? ' su ' + (grid.children.length + pending.length) + ' disponibili' : '')
       : !manifest.count ? 'Il catalogo non contiene ancora offerte. Riprova tra poco.'
         : more.hidden ? (discounted ? 'Nessuna offerta in sconto con questi filtri.' : 'Nessuna offerta corrispondente.')
         : 'Nessuna corrispondenza nei prodotti controllati finora.';
@@ -240,7 +250,7 @@ async function load() {
     more.textContent = 'Riprova';
     more.hidden = false;
   } finally {
-    if (loading === current) loading = undefined;
+    if (loading === current) { loading = undefined; grid.setAttribute('aria-busy', 'false'); }
   }
 }
 function reset() {
@@ -255,6 +265,8 @@ function reset() {
   offset = 0;
   pending = [];
   grid.replaceChildren();
+  resetButton.hidden = !search.value.trim() && !category.value && !merchant.value &&
+    !minPrice.value && !maxPrice.value && !sortOrder.value && discountOnly.getAttribute('aria-pressed') !== 'true';
   void load();
 }
 function start() {
@@ -279,12 +291,27 @@ more.addEventListener('click', () => manifest?.count ? load() : start());
 merchant.addEventListener('change', () => { if (manifest) reset(); });
 category.addEventListener('change', () => { if (manifest) reset(); });
 sortOrder.addEventListener('change', () => { if (manifest) reset(); });
-discountOnly.addEventListener('click', () => {
-  discountOnly.setAttribute('aria-pressed', String(discountOnly.getAttribute('aria-pressed') !== 'true'));
+function updatePriceButtons() {
+  for (const button of priceButtons) button.setAttribute('aria-pressed', String(button.dataset.priceBand === activeBand));
+}
+for (const button of priceButtons) button.addEventListener('click', () => {
+  activeBand = button.dataset.priceBand;
+  minPrice.value = activeBand === 'mid' ? '50' : activeBand === 'high' ? '150' : '';
+  maxPrice.value = activeBand === 'low' ? '50' : activeBand === 'mid' ? '150' : '';
+  updatePriceButtons();
+  if (manifest) reset();
+});
+resetButton.addEventListener('click', () => {
+  search.value = ''; category.value = ''; merchant.value = ''; minPrice.value = ''; maxPrice.value = ''; sortOrder.value = '';
+  activeBand = 'all'; updatePriceButtons();
   if (manifest) reset();
 });
 for (const input of [search, minPrice, maxPrice]) input.addEventListener('input', () => {
   clearTimeout(timer);
+  if (input === minPrice || input === maxPrice) {
+    activeBand = 'custom';
+    for (const button of priceButtons) if (button !== discountOnly) button.setAttribute('aria-pressed', 'false');
+  }
   if (manifest) timer = setTimeout(reset, 200);
 });
 start();

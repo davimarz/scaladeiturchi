@@ -1,1 +1,9 @@
-node "C:\Users\admin\awin-playwright\scaladeiturchi\aggiorna-scala-dei-turchi.cjs"
+# Scala dei Turchi - PowerShell
+# Scarica dai programmi iscritti su Awin, in tutte le categorie.
+node "C:\Users\admin\awin-playwright\scaladeiturchi\aggiorna-scala-dei-turchi.cjs" --tutti-iscritti
+
+# Per controllare l’elenco senza scaricare:
+# node "C:\Users\admin\awin-playwright\scaladeiturchi\aggiorna-scala-dei-turchi.cjs" --tutti-iscritti --solo-verifica
+
+# Dopo aver controllato il riepilogo, esegui questa riga per aggiornare il sito:
+# node "C:\Users\admin\awin-playwright\scaladeiturchi\aggiorna-scala-dei-turchi.cjs" --solo-locali --salta-listini-vuoti

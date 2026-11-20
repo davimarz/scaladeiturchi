@@ -154,7 +154,7 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
       }
       if (await retail.count() !== 1) throw new Error('Retail & Shopping non identificabile in Iscritto.');
       if (!categoryNames.every(name => selection[name] === true)) {
-        const parentBox = page.getByRole('checkbox', { name: /^Retail\\s*&\\s*Shopping$/i }).filter({ visible: true });
+        const parentBox = page.getByRole('checkbox', { name: /^Retail\s*&\s*Shopping(?:\s*\([\d.,]+\))?$/i }).filter({ visible: true });
         if (await parentBox.count() === 1) await parentBox.setChecked(true, { timeout: 5000 });
         else await retail.click({ timeout: 5000 });
         await page.waitForTimeout(800);

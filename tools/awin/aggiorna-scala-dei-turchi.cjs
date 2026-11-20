@@ -692,7 +692,7 @@ function categoryChoice(input) {
 
 async function chooseCategory() {
   console.log('0. Scarica i listini degli iscritti in tutte le sottocategorie');
-  console.log('P. Scarica tutti gli advertiser personali senza pubblicare');
+  console.log('P. Scarica i listini degli advertiser personali e aggiorna il sito');
   console.log('L. Aggiorna solo dai listini già salvati');
   categories.forEach((name, i) => { if (!excludedCategories.has(name)) console.log((i + 1) + '. ' + name); });
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
@@ -731,13 +731,16 @@ async function main() {
       const staging = path.join(working, 'listini', category);
       fs.mkdirSync(staging, { recursive: true });
       if (allCategories) console.log('Categoria ' + (index + 1) + '/' + requestedCategories.length + ': ' + category);
+      let runningDownloader = false;
       try {
         await downloadScript('a4bf3cc0ebecadc7450c6180d42a2d2af6407bc2', 'scarica-listini-awin.cjs', downloadPath, personal ? null : category);
         console.log((dryRun ? 'Verifico il filtro Awin: ' : 'Scarico i listini Awin degli advertiser attivi: ') + category);
+        runningDownloader = true;
         run(process.execPath, [downloadPath, publisher], {
           env: { ...process.env, AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '',
             SCALA_AWIN_HASH_PUBBLICATI: JSON.stringify(hashes), SCALA_AWIN_TUTTE: allCategories ? '1' : '' }
         });
+        runningDownloader = false;
         if (dryRun) return;
         if (!fs.readdirSync(staging).length) {
           console.log('Nessun listino da salvare per ' + category + '.');
@@ -750,14 +753,14 @@ async function main() {
         hasLocalResults = true;
         console.log('Listini aggiornati: ' + count + ' | ' + destination);
       } catch (error) {
-        if (personal && fs.readdirSync(staging).some(name => feedExtension.test(name))) {
+        if (personal && runningDownloader && !dryRun && fs.readdirSync(staging).some(name => feedExtension.test(name))) {
           preserveWorking = true;
           const destination = path.join(local, category);
           const count = await keepLocalFeeds(staging, destination);
           preserveWorking = false;
           console.warn('Listini disponibili salvati: ' + count + ' | ' + destination);
-          console.warn('Scaricamento parziale. Controlla gli errori sopra e riprova; nessun aggiornamento pubblicato.');
-          throw error;
+          console.warn('Alcuni listini non sono stati scaricati. Proseguo con i listini disponibili.');
+          continue;
         }
         if (fs.readdirSync(staging).some(name => feedExtension.test(name))) {
           preserveWorking = true;
@@ -769,10 +772,6 @@ async function main() {
       } finally {
         fs.rmSync(downloadPath, { force: true });
       }
-    }
-    if (personal) {
-      console.log('Scaricamento terminato. Nessun aggiornamento pubblicato.');
-      return;
     }
     if (allCategories) {
       console.log('Listini salvati nelle cartelle di categoria: ' + downloaded);
@@ -786,7 +785,7 @@ async function main() {
     console.log('Aggiorno il catalogo con tutti i listini e le sottocartelle di ' + local);
     run('git', ['clone', '--depth', '1', '--single-branch', '--branch', 'main', repository, repo]);
     run(process.execPath, [path.join(repo, 'tools', 'awin', 'importa-listini-awin.cjs'), repo, local, publisher], {
-      env: { ...process.env, SCALA_AWIN_SALTA_LISTINI_VUOTI: skipEmpty || allCategories ? '1' : '' }
+      env: { ...process.env, SCALA_AWIN_SALTA_LISTINI_VUOTI: skipEmpty || allCategories || personal ? '1' : '' }
     });
     publish(repo);
     if (!await verifyOnline(repo)) {

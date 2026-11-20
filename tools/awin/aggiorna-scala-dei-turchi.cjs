@@ -140,36 +140,34 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
   const correct = selection => categoryNames.every(name => selection[name] === !excluded.has(name));
   let selection = await state();
   if (!correct(selection)) {
-    const retail = page.getByText('Retail & Shopping', { exact: true }).filter({ visible: true });
-    if (Object.keys(selection).length !== categoryNames.length && await retail.count() === 1) {
-      const expand = retail.locator('xpath=ancestor-or-self::li[./ul][1]')
-        .locator(':scope > .hitarea, :scope > [aria-expanded="false"]').filter({ visible: true }).first();
-      if (await expand.isVisible()) await expand.click({ timeout: 5000 }).catch(() => {});
+    const retail = page.getByText(/^Retail\s*&\s*Shopping(?:\s*\([\d.,]+\))?$/i).filter({ visible: true });
+    if (!await retail.count()) {
+      const sector = page.getByText(/^Settori?:?$/i).filter({ visible: true });
+      if (await sector.count() === 1) await sector.click({ timeout: 3000 });
+    }
+    if (await retail.count() !== 1) throw new Error('Retail & Shopping non identificabile in Iscritto.');
+    if (!categoryNames.every(name => selection[name] === true)) {
+      await retail.click({ timeout: 5000 });
+      await page.waitForTimeout(800);
       selection = await state();
     }
-    {
-      for (const name of categoryNames) {
-        if (typeof selection[name] !== 'boolean' || selection[name] === !excluded.has(name)) continue;
-        const label = page.getByText(new RegExp('^' + RegExp.escape(name) + '(?:\\s*\\([\\d.,]+\\))?$', 'i')).filter({ visible: true });
-        if (await label.count() !== 1) continue;
-        await label.click({ timeout: 5000 }).catch(() => {});
-        selection = await state();
-      }
+    for (const name of excluded) {
+      if (selection[name] === false) continue;
+      const option = page.getByText(new RegExp('^' + RegExp.escape(name) + '(?:\\s*\\([\\d.,]+\\))?$', 'i'))
+        .filter({ visible: true });
+      await option.waitFor({ state: 'visible', timeout: 3500 }).catch(() => {});
+      if (await option.count() !== 1) throw new Error('Controllo non individuato: ' + name + '. Nessun listino scaricato.');
+      await option.click({ timeout: 3500 });
+      await page.waitForTimeout(600);
+      selection = await state();
+    }
+    for (let attempt = 0; attempt < 6 && !correct(selection); attempt++) {
+      await page.waitForTimeout(500);
+      selection = await state();
     }
     if (!correct(selection)) {
-      scalaStatus('In «Iscritto → Settore», apri «Retail & Shopping» e spunta le 38 voci. Lascia fuori Erotico e Vini, alcolici e tabacchi.');
-      const until = Date.now() + 120000;
-      while (!page.isClosed() && Date.now() < until && !correct(selection)) {
-        await page.waitForTimeout(750);
-        selection = await state();
-      }
-    }
-    if (!correct(selection)) {
-      const unknown = categoryNames.filter(name => typeof selection[name] !== 'boolean');
-      const wrong = categoryNames.filter(name => typeof selection[name] === 'boolean' && selection[name] !== !excluded.has(name));
-      throw new Error('Filtri non confermati. ' +
-        (unknown.length ? 'Stato non leggibile: ' + unknown.join(', ') + '. ' : '') +
-        (wrong.length ? 'Spunta da correggere: ' + wrong.join(', ') + '. ' : '') + 'Nessun listino scaricato.');
+      const unverified = categoryNames.filter(name => selection[name] !== !excluded.has(name));
+      throw new Error('Selezione Retail & Shopping non confermata: ' + unverified.join(', ') + '. Nessun listino scaricato.');
     }
   }
   await page.waitForTimeout(1200);
@@ -302,6 +300,28 @@ async function openAwinRoute(page, route) {
   }
 }
 
+async function readFeedEligibleAdvertisers(page, targets) {
+  await open(page, '/datafeed/step-one');
+  const url = await getFeedListUrl(page);
+  if (!url) throw new Error('Lista ufficiale dei feed Awin non disponibile.');
+  const response = await page.request.get(url, { timeout: 25000, maxRedirects: 0 });
+  try {
+    if (!response.ok()) throw new Error('Lista ufficiale dei feed Awin: HTTP ' + response.status() + '.');
+    const [header = [], ...rows] = readCsvRows(await response.text());
+    const fields = header.map(value => value.trim().toLowerCase());
+    const advertiser = fields.indexOf('advertiser name');
+    const membership = fields.indexOf('membership status');
+    const urlIndex = fields.findIndex(field => field === 'url' || /^(?:download|data feed) (?:url|link)$/.test(field));
+    if (advertiser < 0 || membership < 0 || urlIndex < 0) throw new Error('Formato della lista dei feed Awin non riconosciuto.');
+    const key = value => value?.trim().replace(/\s+/g, ' ').toLowerCase();
+    const available = new Set(rows.filter(row => key(row[membership]) === 'active' &&
+      /^https?:\/\//i.test(row[urlIndex]?.trim() ?? '')).map(row => key(row[advertiser])));
+    return targets.filter(name => available.has(key(name)));
+  } finally {
+    await response.dispose();
+  }
+}
+
 async function feedFingerprint(filename) {
   const hash = require('node:crypto').createHash('sha256');
   for await (const chunk of require('node:fs').createReadStream(filename)) hash.update(chunk);
@@ -345,6 +365,9 @@ async function downloadScript(revision, name, destination, category) {
   if (script.split(requestHook).length !== 2) throw new Error('Punto di selezione dei listini Awin non riconosciuto.');
   script = script.replace(hook, () => 'let selection; try { selection = await (' + (category === null ? readAllPersonalAdvertisers : readCategoryAdvertisers).toString() +
     ')(page, ' + JSON.stringify(category) + ', ' + JSON.stringify(categories) + '); } catch (error) { console.error("Awin | " + error.message); process.exitCode = 1; return; }' +
+    (category === null ? ' const seen = selection.targets.length; try { selection.targets = await (' +
+      readFeedEligibleAdvertisers.toString() + ')(page, selection.targets); } catch (error) { console.error(error.message); process.exitCode = 1; return; }' +
+      ' scalaStatus("Feed disponibili: " + selection.targets.length + "/" + seen + " advertiser filtrati.");' : '') +
     ' const active = selection.joined;' +
     ' console.log("Awin | Iscritto / " + ' + JSON.stringify(category ?? 'Advertiser personali') + ' + ": " + (selection.targets.join(", ") || "nessun advertiser"));' +
     ' if (process.env.SCALA_AWIN_SOLO_VERIFICA === "1") return;' +

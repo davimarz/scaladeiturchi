@@ -105,7 +105,7 @@ async function readAllPersonalAdvertisers(page) {
     throw new Error('Elenco Iscritto vuoto o totale non verificabile.');
   }
   const joinedNames = new Set(first.names);
-  scalaStatus('Lettura: ' + joinedNames.size + '/' + first.total + ' advertiser');
+  let pageRows = first.rowCount ?? first.names.length;
 
   async function waitForNewRows(timeout = 10000) {
     const deadline = Date.now() + timeout;
@@ -113,6 +113,7 @@ async function readAllPersonalAdvertisers(page) {
       const current = await page.evaluate(inspectPersonalAdvertisers, false).catch(() => null);
       const additions = current?.total === first.total ? current.names?.filter(name => !joinedNames.has(name)) : [];
       if (additions?.length) {
+        pageRows = current.rowCount ?? current.names.length;
         return additions;
       }
       await new Promise(resolve => setTimeout(resolve, 250));
@@ -142,8 +143,14 @@ async function readAllPersonalAdvertisers(page) {
     return [];
   }
 
-  let expanded = false;
-  for (let number = 2; joinedNames.size && first.total > joinedNames.size; number++) {
+  if (joinedNames.size < first.total) {
+    const additions = await expandResults();
+    if (additions.length) additions.forEach(name => joinedNames.add(name));
+  }
+  const pageSize = pageRows;
+  const lastPage = Math.ceil(first.total / pageSize);
+  scalaStatus('Lettura: ' + joinedNames.size + '/' + first.total + ' advertiser');
+  for (let number = 2; number <= lastPage && first.total > joinedNames.size; number++) {
     const nextLabel = /^(successiv[ao]|next)(?:\s*[›»→])?$/i;
     const pageLabel = new RegExp('^' + number + '$');
     const controls = [
@@ -167,11 +174,6 @@ async function readAllPersonalAdvertisers(page) {
         // If the control changed, try the next visible control.
       }
     }
-    if (!additions.length && number === 2 && !expanded && !page.isClosed()) {
-      expanded = true;
-      additions = await expandResults();
-      if (additions.length) number--; // A page-size change can keep the browser on page 1.
-    }
     if (!additions.length && !page.isClosed()) {
       scalaStatus('Awin: apri pagina ' + number + ' in «Iscritto» o aumenta i risultati per pagina. Attendo fino a 2 minuti.');
       additions = await waitForNewRows(120000);
@@ -183,6 +185,22 @@ async function readAllPersonalAdvertisers(page) {
     if (joinedNames.size + additions.length > first.total) throw new Error('Il totale degli iscritti è cambiato durante la lettura.');
     additions.forEach(name => joinedNames.add(name));
     scalaStatus('Lettura: ' + joinedNames.size + '/' + first.total + ' advertiser');
+  }
+  if (joinedNames.size < first.total && !page.isClosed()) {
+    scalaStatus('Letti ' + joinedNames.size + '/' + first.total +
+      '. In «Iscritto», aumenta «Risultati per pagina», poi torna alla prima pagina. Attendo fino a 2 minuti.');
+    let until = Date.now() + 120000;
+    while (joinedNames.size < first.total && Date.now() < until && !page.isClosed()) {
+      const additions = await waitForNewRows(Math.min(1000, until - Date.now()));
+      if (additions.length && joinedNames.size + additions.length <= first.total) {
+        additions.forEach(name => joinedNames.add(name));
+        scalaStatus('Lettura: ' + joinedNames.size + '/' + first.total + ' advertiser');
+      }
+    }
+  }
+  if (joinedNames.size !== first.total) {
+    throw new Error('Elenco incompleto: ' + joinedNames.size + '/' + first.total +
+      ' nomi distinti. Possibili righe ripetute o omonimi; nessun download avviato.');
   }
   const selected = [...joinedNames];
   return { joined: selected, targets: selected };
@@ -238,6 +256,10 @@ async function downloadScript(revision, name, destination, category) {
   });
   if (!response.ok) throw new Error('Impossibile scaricare ' + name + ' da GitHub (HTTP ' + response.status + ')');
   let script = await response.text();
+  const inspectedRows = 'return { names: [...new Set(names)], total: count ? Number(count[1]) : null };';
+  if (!script.includes(inspectedRows)) throw new Error('Conteggio righe Awin non riconosciuto.');
+  script = script.replace(inspectedRows,
+    'return { names: [...new Set(names)], rowCount: names.length, total: count ? Number(count[1]) : null };');
   const openFunction = /^async function open\(page, route\) \{[\s\S]*?^\}/m;
   if (!openFunction.test(script)) throw new Error('Navigazione Awin non riconosciuta.');
   script = script.replace(openFunction, () => openAwinRoute.toString().replace('function openAwinRoute(', 'function open('));

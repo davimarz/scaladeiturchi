@@ -310,6 +310,26 @@ async function openAwinRoute(page, route) {
   }
 }
 
+async function chooseAdvertiserFeeds(targets) {
+  if (!targets.length) return [];
+  const sorted = [...targets].sort((a, b) => a.localeCompare(b, 'it'));
+  sorted.forEach((name, index) => scalaStatus((index + 1) + '. ' + name));
+  const prompt = require('node:readline/promises').createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    while (true) {
+      const answer = (await prompt.question('Numeri dei listini (es. 1, 3, 5), 0 per annullare: ')).trim();
+      if (answer === '0') return [];
+      if (/^\d+(?:[\s,]+\d+)*$/.test(answer)) {
+        const numbers = [...new Set(answer.split(/[\s,]+/).map(Number))];
+        if (numbers.every(n => n >= 1 && n <= sorted.length)) return numbers.map(n => sorted[n - 1]);
+      }
+      scalaStatus('Selezione non valida. Inserisci numeri da 1 a ' + sorted.length + ' oppure 0.');
+    }
+  } finally {
+    prompt.close();
+  }
+}
+
 async function readFeedEligibleAdvertisers(page, targets) {
   await open(page, '/datafeed/step-one');
   const url = await getFeedListUrl(page);
@@ -321,10 +341,11 @@ async function readFeedEligibleAdvertisers(page, targets) {
     const fields = header.map(value => value.trim().toLowerCase());
     const advertiser = fields.indexOf('advertiser name');
     const membership = fields.indexOf('membership status');
+    const language = fields.indexOf('language');
     const urlIndex = fields.findIndex(field => field === 'url' || /^(?:download|data feed) (?:url|link)$/.test(field));
-    if (advertiser < 0 || membership < 0 || urlIndex < 0) throw new Error('Formato della lista dei feed Awin non riconosciuto.');
+    if (advertiser < 0 || membership < 0 || language < 0 || urlIndex < 0) throw new Error('Formato della lista dei feed Awin non riconosciuto.');
     const key = value => value?.trim().replace(/\s+/g, ' ').toLowerCase();
-    const available = new Set(rows.filter(row => key(row[membership]) === 'active' &&
+    const available = new Set(rows.filter(row => key(row[membership]) === 'active' && /^(?:italian|italiano|it(?:[-_]it)?)$/i.test(key(row[language]) ?? '') &&
       /^https?:\/\//i.test(row[urlIndex]?.trim() ?? '')).map(row => key(row[advertiser])));
     return targets.filter(name => available.has(key(name)));
   } finally {
@@ -377,10 +398,12 @@ async function downloadScript(revision, name, destination, category) {
     ')(page, ' + JSON.stringify(category) + ', ' + JSON.stringify(categories) + '); } catch (error) { console.error("Awin | " + error.message); process.exitCode = 1; return; }' +
     (category === null ? ' const seen = selection.targets.length; try { selection.targets = await (' +
       readFeedEligibleAdvertisers.toString() + ')(page, selection.targets); } catch (error) { console.error(error.message); process.exitCode = 1; return; }' +
-      ' scalaStatus("Feed disponibili: " + selection.targets.length + "/" + seen + " advertiser filtrati.");' : '') +
+      ' scalaStatus("Feed in italiano disponibili: " + selection.targets.length + "/" + seen + " advertiser filtrati.");' : '') +
     ' const active = selection.joined;' +
     ' console.log("Awin | Iscritto / " + ' + JSON.stringify(category ?? 'Advertiser personali') + ' + ": " + (selection.targets.join(", ") || "nessun advertiser"));' +
     ' if (process.env.SCALA_AWIN_SOLO_VERIFICA === "1") return;' +
+    ' if (process.env.SCALA_AWIN_SCELTA_LISTINI === "1") selection.targets = await (' +
+      chooseAdvertiserFeeds.toString() + ')(selection.targets);' +
     ' if (!selection.targets.length) { console.log("Nessun advertiser iscritto da elaborare."); return; }')
     .replace(requestHook, 'const requested = selection.targets.map(name => name.trim().toLowerCase());');
   const listedStart = '    if (links.length !== 1) {';
@@ -703,15 +726,17 @@ async function chooseCategory() {
 async function main() {
   const args = process.argv.slice(2).map(arg => arg === '--tutti-iscritti' ? 'P' : arg);
   const dryRun = args.includes('--solo-verifica');
+  const selectFeeds = args.includes('--scegli-listini');
   const skipEmpty = args.includes('--salta-listini-vuoti');
   const localFlag = args.includes('--solo-locali');
-  const [choice, ...extra] = args.filter(arg => !['--solo-verifica', '--salta-listini-vuoti', '--solo-locali'].includes(arg));
+  const [choice, ...extra] = args.filter(arg => !['--solo-verifica', '--salta-listini-vuoti', '--solo-locali', '--scegli-listini'].includes(arg));
   if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria | P | --tutti-iscritti | L | --solo-locali] [--solo-verifica | --salta-listini-vuoti]');
   const selection = choice === undefined && (localFlag || skipEmpty) ? 'locale'
     : choice === undefined ? await chooseCategory() : categoryChoice(choice);
   const localOnly = selection === 'locale' || localFlag || (selection === null && skipEmpty);
   if (localOnly && selection !== null && selection !== 'locale') throw new Error('Usa --solo-locali senza un numero di sottocategoria.');
   const personal = selection === 'personali';
+  if (selectFeeds && (!personal || dryRun)) throw new Error('Usa --scegli-listini con --tutti-iscritti, senza --solo-verifica.');
   if (personal && skipEmpty) throw new Error('Per scaricare gli advertiser personali usa P senza --salta-listini-vuoti.');
   const allCategories = selection === null && !localOnly;
   if (dryRun && (localOnly || allCategories)) throw new Error('Per la verifica scegli una sottocategoria diversa da 0.');
@@ -738,6 +763,7 @@ async function main() {
         runningDownloader = true;
         run(process.execPath, [downloadPath, publisher], {
           env: { ...process.env, AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '',
+            SCALA_AWIN_SCELTA_LISTINI: selectFeeds ? '1' : '',
             SCALA_AWIN_HASH_PUBBLICATI: JSON.stringify(hashes), SCALA_AWIN_TUTTE: allCategories ? '1' : '' }
         });
         runningDownloader = false;
@@ -773,6 +799,7 @@ async function main() {
         fs.rmSync(downloadPath, { force: true });
       }
     }
+    if (selectFeeds) return;
     if (allCategories) {
       console.log('Listini salvati nelle cartelle di categoria: ' + downloaded);
       if (failures.length) console.warn('Categorie da riprovare: ' + failures.join(', '));

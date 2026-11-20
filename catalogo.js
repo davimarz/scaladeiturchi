@@ -7,6 +7,7 @@ const merchant = document.getElementById('venditore');
 const category = document.getElementById('categoria');
 const minPrice = document.getElementById('prezzo-minimo');
 const maxPrice = document.getElementById('prezzo-massimo');
+const shuffleButton = document.getElementById('mescola-sconti');
 const sortOrder = document.getElementById('ordinamento');
 const discountOnly = document.getElementById('solo-sconti');
 const collator = new Intl.Collator('it', { sensitivity: 'base', numeric: true });
@@ -197,8 +198,8 @@ async function load() {
     return;
   }
   const priceFilter = minPrice.value !== '' || maxPrice.value !== '';
-  const discounted = discountOnly.getAttribute('aria-pressed') === 'true';
   const order = sortOrder.value;
+  const discounted = order === 'shuffle' || discountOnly.getAttribute('aria-pressed') === 'true';
   const matches = item => (!seller || item.merchant === seller) && (!selected || selected === categoryFamily(item.category)) &&
     price(item.price) >= lower && price(item.price) <= upper && (!(activeBand === 'mid' || activeBand === 'high') || price(item.price) > lower) && (!discounted || onSale(item)) &&
     terms.every(term => normalize([item.name, item.brand, item.merchant].join(' ')).includes(term));
@@ -211,7 +212,12 @@ async function load() {
         if (revision !== current) return;
         for (const rows of next) for (const item of rows) if (matches(item)) results.push(item);
       }
-      results.sort((a, b) => {
+      if (order === 'shuffle') {
+        for (let i = results.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [results[i], results[j]] = [results[j], results[i]];
+        }
+      } else results.sort((a, b) => {
         const byName = () => collator.compare(a.name, b.name);
         if (order === 'name') return byName();
         const difference = price(a.price) - price(b.price);
@@ -290,6 +296,10 @@ function start() {
 more.addEventListener('click', () => manifest?.count ? load() : start());
 merchant.addEventListener('change', () => { if (manifest) reset(); });
 category.addEventListener('change', () => { if (manifest) reset(); });
+shuffleButton?.addEventListener('click', () => {
+  sortOrder.value = 'shuffle';
+  if (manifest) reset();
+});
 sortOrder.addEventListener('change', () => { if (manifest) reset(); });
 function updatePriceButtons() {
   for (const button of priceButtons) button.setAttribute('aria-pressed', String(button.dataset.priceBand === activeBand));

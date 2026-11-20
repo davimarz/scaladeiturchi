@@ -92,7 +92,22 @@ async function reuseRecentFeed(root, destination, basename, supported, now = Dat
   }
 }
 
-async function readAllPersonalAdvertisers(page) {
+async function readAllPersonalAdvertisers(page, _category, categoryNames) {
+  const excluded = new Set(['Erotico', 'Vini, alcolici e tabacchi']);
+  const state = async () => page.evaluate(names => {
+    const labels = new Set(names);
+    const result = {};
+    for (const node of document.querySelectorAll('label, span, a, [role="checkbox"]')) {
+      const name = node.textContent.trim().replace(/\s*\([\d.]+\)$/, '');
+      if (!labels.has(name) || !node.getClientRects().length) continue;
+      const checkbox = node.closest('label')?.control ||
+        node.closest('input[type="checkbox"], [role="checkbox"]') ||
+        node.closest('li')?.querySelector('input[type="checkbox"], [role="checkbox"]');
+      if (!checkbox) continue;
+      result[name] = checkbox.checked === true || checkbox.getAttribute('aria-checked') === 'true';
+    }
+    return result;
+  }, categoryNames);
   const heading = page.getByText(/^Advertiser personali(?:\s*\(\s*\d+\s*\))?$/i)
     .filter({ visible: true }).first();
   await heading.waitFor({ timeout: 30000 });
@@ -100,6 +115,36 @@ async function readAllPersonalAdvertisers(page) {
   if (await reset.count() !== 1) throw new Error('Comando «Reimposta ricerca» non identificabile in Iscritto.');
   await reset.click({ timeout: 8000 });
   await heading.waitFor({ timeout: 20000 });
+  const correct = selection => categoryNames.every(name => selection[name] === !excluded.has(name));
+  let selection = await state();
+  if (!correct(selection)) {
+    const retail = page.getByText('Retail & Shopping', { exact: true }).filter({ visible: true });
+    if (Object.keys(selection).length !== categoryNames.length && await retail.count() === 1) {
+      const expand = retail.locator('xpath=ancestor-or-self::li[./ul][1]')
+        .locator(':scope > .hitarea, :scope > [aria-expanded="false"]').filter({ visible: true }).first();
+      if (await expand.isVisible()) await expand.click({ timeout: 5000 }).catch(() => {});
+      selection = await state();
+    }
+    if (Object.keys(selection).length === categoryNames.length) {
+      for (const name of categoryNames) {
+        if (selection[name] === !excluded.has(name)) continue;
+        const label = page.getByText(name, { exact: true }).filter({ visible: true });
+        if (await label.count() !== 1) break;
+        await label.click({ timeout: 5000 }).catch(() => {});
+        selection = await state();
+      }
+    }
+    if (!correct(selection)) {
+      scalaStatus('In «Iscritto → Settore», apri «Retail & Shopping» e spunta le 38 voci. Lascia fuori Erotico e Vini, alcolici e tabacchi.');
+      const until = Date.now() + 120000;
+      while (!page.isClosed() && Date.now() < until && !correct(selection)) {
+        await page.waitForTimeout(750);
+        selection = await state();
+      }
+    }
+    if (!correct(selection)) throw new Error('Le 38 categorie non sono state confermate. Nessun listino scaricato.');
+  }
+  await page.waitForTimeout(1200);
   const first = await readAdvertiserPage(page);
   if (!Number.isInteger(first.total) || first.total < first.names.length || !first.names.length) {
     throw new Error('Elenco Iscritto vuoto o totale non verificabile.');
@@ -202,6 +247,7 @@ async function readAllPersonalAdvertisers(page) {
     throw new Error('Elenco incompleto: ' + joinedNames.size + '/' + first.total +
       ' nomi distinti. Possibili righe ripetute o omonimi; nessun download avviato.');
   }
+  if (!correct(await state())) throw new Error('I filtri di categoria sono cambiati. Nessun listino scaricato.');
   const selected = [...joinedNames];
   return { joined: selected, targets: selected };
 }
@@ -568,6 +614,8 @@ async function readCategoryAdvertisers(page, category, categoryNames) {
   return { joined: [...new Set([...unfiltered.names, ...targets])], targets };
 }
 
+const excludedCategories = new Set(['Erotico', 'Vini, alcolici e tabacchi']);
+
 function categoryChoice(input) {
   const number = input.trim();
   if (number === '0') return null;
@@ -576,14 +624,16 @@ function categoryChoice(input) {
   if (!/^[1-9]\d*$/.test(number) || Number(number) > categories.length) {
     throw new Error('Scegli un numero da 0 a ' + categories.length + ' oppure P o L.');
   }
-  return categories[Number(number) - 1];
+  const category = categories[Number(number) - 1];
+  if (excludedCategories.has(category)) throw new Error('Categoria esclusa: ' + category);
+  return category;
 }
 
 async function chooseCategory() {
   console.log('0. Scarica i listini degli iscritti in tutte le sottocategorie');
   console.log('P. Scarica tutti gli advertiser personali senza pubblicare');
   console.log('L. Aggiorna solo dai listini già salvati');
-  categories.forEach((name, i) => console.log((i + 1) + '. ' + name));
+  categories.forEach((name, i) => { if (!excludedCategories.has(name)) console.log((i + 1) + '. ' + name); });
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try { return categoryChoice(await prompt.question('Scegli la sottocategoria da scaricare: ')); }
   finally { prompt.close(); }
@@ -604,7 +654,7 @@ async function main() {
   if (personal && skipEmpty) throw new Error('Per scaricare gli advertiser personali usa P senza --salta-listini-vuoti.');
   const allCategories = selection === null && !localOnly;
   if (dryRun && (localOnly || allCategories)) throw new Error('Per la verifica scegli una sottocategoria diversa da 0.');
-  const requestedCategories = localOnly ? [] : allCategories ? categories : [personal ? 'Advertiser personali' : selection];
+  const requestedCategories = localOnly ? [] : allCategories ? categories.filter(name => !excludedCategories.has(name)) : [personal ? 'Advertiser personali' : selection];
   const publisher = '3150312';
   const local = path.join(__dirname, 'LISTINI');
   const working = fs.mkdtempSync(path.join(os.tmpdir(), 'scala-awin-'));

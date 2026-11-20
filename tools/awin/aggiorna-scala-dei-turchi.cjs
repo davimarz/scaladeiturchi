@@ -151,15 +151,26 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
       await page.waitForTimeout(800);
       selection = await state();
     }
-    for (const name of excluded) {
-      if (selection[name] === false) continue;
-      const option = page.getByText(new RegExp('^' + RegExp.escape(name) + '(?:\\s*\\([\\d.,]+\\))?$', 'i'))
-        .filter({ visible: true });
-      await option.waitFor({ state: 'visible', timeout: 3500 }).catch(() => {});
-      if (await option.count() !== 1) throw new Error('Controllo non individuato: ' + name + '. Nessun listino scaricato.');
-      await option.click({ timeout: 3500 });
-      await page.waitForTimeout(600);
-      selection = await state();
+    // Some versions expand the branch without selecting its children.
+    const missing = categoryNames.filter(name => selection[name] !== !excluded.has(name));
+    if (missing.length > 2) scalaStatus('Awin: selezione delle singole categorie (' + missing.length + ' da controllare).');
+    for (const name of [...excluded, ...categoryNames.filter(name => !excluded.has(name))]) {
+      const desired = !excluded.has(name);
+      if (selection[name] === desired) continue;
+      if (typeof selection[name] !== 'boolean') continue;
+      const pattern = new RegExp('^' + RegExp.escape(name) + '(?:\\s*\\([\\d.,]+\\))?$', 'i');
+      const checkbox = page.getByRole('checkbox', { name: pattern }).filter({ visible: true });
+      const label = page.getByText(pattern).filter({ visible: true });
+      if (await checkbox.count() === 1) {
+        await checkbox.click({ timeout: 3500 }).catch(() => {});
+      } else if (await label.count() === 1) {
+        await label.click({ timeout: 3500 }).catch(() => {});
+      }
+      for (let attempt = 0; attempt < 5; attempt++) {
+        selection = await state();
+        if (selection[name] === desired) break;
+        await page.waitForTimeout(200);
+      }
     }
     for (let attempt = 0; attempt < 6 && !correct(selection); attempt++) {
       await page.waitForTimeout(500);

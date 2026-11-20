@@ -95,17 +95,39 @@ async function reuseRecentFeed(root, destination, basename, supported, now = Dat
 async function readAllPersonalAdvertisers(page, _category, categoryNames) {
   const excluded = new Set(['Erotico', 'Vini, alcolici e tabacchi']);
   const state = async () => page.evaluate(names => {
-    const labels = new Set(names);
+    const normalize = value => (value ?? '').normalize('NFD').replace(/\p{M}/gu, '')
+      .replace(/\s*\([\d.,]+\)\s*$/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const labels = new Map(names.map(name => [normalize(name), name]));
     const result = {};
-    for (const node of document.querySelectorAll('label, span, a, [role="checkbox"]')) {
-      const name = node.textContent.trim().replace(/\s*\([\d.]+\)$/, '');
-      if (!labels.has(name) || !node.getClientRects().length) continue;
-      const checkbox = node.closest('label')?.control ||
-        node.closest('input[type="checkbox"], [role="checkbox"]') ||
-        node.closest('li')?.querySelector('input[type="checkbox"], [role="checkbox"]');
-      if (!checkbox) continue;
-      result[name] = checkbox.checked === true || checkbox.getAttribute('aria-checked') === 'true';
+    const ambiguous = new Set();
+    const control = 'input[type="checkbox"], [role="checkbox"], [aria-checked]';
+    for (const node of document.querySelectorAll('label, span, a, div, li, [role="checkbox"], [aria-label]')) {
+      if (!node.getClientRects().length) continue;
+      const key = normalize(node.getAttribute('aria-label') || node.textContent);
+      const name = labels.get(key);
+      if (!name || [...node.children].some(child => normalize(child.textContent) === key)) continue;
+      const linked = node.closest('label')?.control;
+      let checkbox = linked?.matches(control) ? linked : node.closest(control);
+      let row;
+      if (!checkbox) {
+        for (let box = node; box && box !== document.body; box = box.parentElement) {
+          const controls = box.querySelectorAll(control);
+          if (controls.length > 1) break;
+          if (controls.length === 1) { checkbox = controls[0]; break; }
+          if (box.matches('li.checkbox, [role="treeitem"], .checkbox')) { row = box; break; }
+        }
+      }
+      const own = checkbox || row;
+      if (!own) continue;
+      const aria = own.getAttribute('aria-checked');
+      const value = own.indeterminate || aria === 'mixed' ? null :
+        typeof own.checked === 'boolean' ? own.checked :
+        aria === 'true' || aria === 'false' ? aria === 'true' :
+        own.matches('.selected, .checked');
+      if (Object.hasOwn(result, name) && result[name] !== value) ambiguous.add(name);
+      else result[name] = value;
     }
+    for (const name of ambiguous) delete result[name];
     return result;
   }, categoryNames);
   const heading = page.getByText(/^Advertiser personali(?:\s*\(\s*\d+\s*\))?$/i)
@@ -125,11 +147,11 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
       if (await expand.isVisible()) await expand.click({ timeout: 5000 }).catch(() => {});
       selection = await state();
     }
-    if (Object.keys(selection).length === categoryNames.length) {
+    {
       for (const name of categoryNames) {
-        if (selection[name] === !excluded.has(name)) continue;
-        const label = page.getByText(name, { exact: true }).filter({ visible: true });
-        if (await label.count() !== 1) break;
+        if (typeof selection[name] !== 'boolean' || selection[name] === !excluded.has(name)) continue;
+        const label = page.getByText(new RegExp('^' + RegExp.escape(name) + '(?:\\s*\\([\\d.,]+\\))?$', 'i')).filter({ visible: true });
+        if (await label.count() !== 1) continue;
         await label.click({ timeout: 5000 }).catch(() => {});
         selection = await state();
       }
@@ -142,7 +164,13 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
         selection = await state();
       }
     }
-    if (!correct(selection)) throw new Error('Le 38 categorie non sono state confermate. Nessun listino scaricato.');
+    if (!correct(selection)) {
+      const unknown = categoryNames.filter(name => typeof selection[name] !== 'boolean');
+      const wrong = categoryNames.filter(name => typeof selection[name] === 'boolean' && selection[name] !== !excluded.has(name));
+      throw new Error('Filtri non confermati. ' +
+        (unknown.length ? 'Stato non leggibile: ' + unknown.join(', ') + '. ' : '') +
+        (wrong.length ? 'Spunta da correggere: ' + wrong.join(', ') + '. ' : '') + 'Nessun listino scaricato.');
+    }
   }
   await page.waitForTimeout(1200);
   const first = await readAdvertiserPage(page);

@@ -151,33 +151,40 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
       await page.waitForTimeout(800);
       selection = await state();
     }
-    // Some versions expand the branch without selecting its children.
-    const missing = categoryNames.filter(name => selection[name] !== !excluded.has(name));
-    if (missing.length > 2) scalaStatus('Awin: selezione delle singole categorie (' + missing.length + ' da controllare).');
-    for (const name of [...excluded, ...categoryNames.filter(name => !excluded.has(name))]) {
-      const desired = !excluded.has(name);
-      if (selection[name] === desired) continue;
-      if (typeof selection[name] !== 'boolean') continue;
+    const settle = async (ready, timeout = 4000) => {
+      const deadline = Date.now() + timeout;
+      do {
+        selection = await state();
+        if (ready(selection)) return;
+        await page.waitForTimeout(250);
+      } while (Date.now() < deadline && !page.isClosed());
+    };
+    const clickIfNeeded = async (name, desired) => {
+      selection = await state();
+      if (selection[name] === desired) return;
       const pattern = new RegExp('^' + RegExp.escape(name) + '(?:\\s*\\([\\d.,]+\\))?$', 'i');
       const checkbox = page.getByRole('checkbox', { name: pattern }).filter({ visible: true });
       const label = page.getByText(pattern).filter({ visible: true });
       if (await checkbox.count() === 1) {
-        await checkbox.click({ timeout: 3500 }).catch(() => {});
-      } else if (await label.count() === 1) {
-        await label.click({ timeout: 3500 }).catch(() => {});
+        // setChecked verifies the target state and avoids toggling an already selected box.
+        await checkbox.setChecked(desired, { timeout: 2500 }).catch(() => {});
+      } else if (typeof selection[name] === 'boolean' && await label.count() === 1) {
+        await label.click({ timeout: 2500 }).catch(() => {});
       }
-      for (let attempt = 0; attempt < 5; attempt++) {
-        selection = await state();
-        if (selection[name] === desired) break;
-        await page.waitForTimeout(200);
-      }
+      await settle(value => value[name] === desired, 1200);
+    };
+    const allowed = categoryNames.filter(name => !excluded.has(name));
+    await settle(value => allowed.every(name => value[name] === true));
+    for (const name of excluded) await clickIfNeeded(name, false);
+    await settle(correct);
+    // Repair only entries still missing after the bulk update and the exclusions.
+    for (const name of allowed) {
+      if (selection[name] !== true) await clickIfNeeded(name, true);
     }
-    for (let attempt = 0; attempt < 6 && !correct(selection); attempt++) {
-      await page.waitForTimeout(500);
-      selection = await state();
-    }
+    await settle(correct, 1500);
     if (!correct(selection)) {
-      const unverified = categoryNames.filter(name => selection[name] !== !excluded.has(name));
+      const unverified = categoryNames.filter(name => selection[name] !== !excluded.has(name))
+        .map(name => name + (typeof selection[name] === 'boolean' ? ' (spunta errata)' : ' (stato non leggibile)'));
       throw new Error('Selezione Retail & Shopping non confermata: ' + unverified.join(', ') + '. Nessun listino scaricato.');
     }
   }

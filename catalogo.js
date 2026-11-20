@@ -198,7 +198,7 @@ async function load() {
     return;
   }
   const priceFilter = minPrice.value !== '' || maxPrice.value !== '';
-  const order = sortOrder.value;
+  const order = sortOrder.value === 'discount' ? '' : sortOrder.value;
   const discounted = order === 'shuffle' || discountOnly.getAttribute('aria-pressed') === 'true';
   const matches = item => (!seller || item.merchant === seller) && (!selected || selected === categoryFamily(item.category)) &&
     price(item.price) >= lower && price(item.price) <= upper && (!(activeBand === 'mid' || activeBand === 'high') || price(item.price) > lower) && (!discounted || onSale(item)) &&
@@ -272,7 +272,7 @@ function reset() {
   pending = [];
   grid.replaceChildren();
   resetButton.hidden = !search.value.trim() && !category.value && !merchant.value &&
-    !minPrice.value && !maxPrice.value && !sortOrder.value && discountOnly.getAttribute('aria-pressed') !== 'true';
+    !minPrice.value && !maxPrice.value && (!sortOrder.value || sortOrder.value === 'discount') && discountOnly.getAttribute('aria-pressed') !== 'true';
   void load();
 }
 function start() {

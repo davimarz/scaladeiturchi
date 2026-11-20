@@ -182,7 +182,16 @@ function modelVariant(record, name, merchant, category) {
   };
 }
 
+function excludedProductCategory(record) {
+  return [record.merchant_category, record.merchant_product_category_path, record.category_name, record.product_type,
+    record.awin_category, record.awin_category_name].some(value => {
+    const category = normalize(value ?? '').replace(/[_-]/g, ' ');
+    return /\b(?:erotico|erotica|sex products?|sex toys?|adult products?|prodotti erotici|vini|vino|wines?|alcolici|alcoholic beverages?|spirits|liquori|birre?|beers?|tabacchi|tabacco|tobacco|vape|sigarette elettroniche|e cigarettes?)\b/u.test(category);
+  });
+}
+
 function offer(record, merchant, publisher, reject = () => null) {
+  if (excludedProductCategory(record)) return reject('categoria esclusa');
   const name = pick(record.product_name, record.title);
   const availability = normalize(pick(record.availability, record.in_stock, record.stock_status));
   if (/^(?:0|no|false|out[ _-]?of[ _-]?stock|unavailable|esaurito|non disponibile|pre[ _-]?order)$/.test(availability)) return reject('non disponibili');
@@ -303,7 +312,8 @@ function main(repo, directory, publisher) {
       const details = [...reasons].map(([reason, count]) => reason + ': ' + count);
       if (invalid) details.push('righe malformate: ' + invalid);
       const issue = filename + ': nessuna offerta valida (' + (details.join('; ') || 'nessuna riga prodotto') + ')';
-      if (invalid || process.env.SCALA_AWIN_SALTA_LISTINI_VUOTI !== '1') throw new Error(issue + '; catalogo precedente conservato.');
+      const onlyExcluded = reasons.size === 1 && reasons.has('categoria esclusa');
+      if (invalid || (!onlyExcluded && process.env.SCALA_AWIN_SALTA_LISTINI_VUOTI !== '1')) throw new Error(issue + '; catalogo precedente conservato.');
       console.warn('Listino escluso: ' + issue);
       continue;
     }

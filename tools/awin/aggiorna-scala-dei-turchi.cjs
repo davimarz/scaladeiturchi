@@ -176,12 +176,8 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
     const allowed = categoryNames.filter(name => !excluded.has(name));
     await settle(value => allowed.every(name => value[name] === true));
     for (const name of excluded) await clickIfNeeded(name, false);
+    // Validate the final selection without clicking any allowed subcategory.
     await settle(correct);
-    // Repair only entries still missing after the bulk update and the exclusions.
-    for (const name of allowed) {
-      if (selection[name] !== true) await clickIfNeeded(name, true);
-    }
-    await settle(correct, 1500);
     if (!correct(selection)) {
       const unverified = categoryNames.filter(name => selection[name] !== !excluded.has(name))
         .map(name => name + (typeof selection[name] === 'boolean' ? ' (spunta errata)' : ' (stato non leggibile)'));

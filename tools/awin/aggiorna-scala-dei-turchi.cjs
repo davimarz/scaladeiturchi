@@ -117,6 +117,11 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
           if (box.matches('li.checkbox, [role="treeitem"], .checkbox')) { row = box; break; }
         }
       }
+      const reference = node.closest('label, [role="checkbox"], [role="option"], [role="treeitem"], button');
+      const input = reference?.control || reference?.querySelector('input[type="checkbox"]');
+      const refChecked = input?.checked === true || [node, reference, row].some(element =>
+        ['aria-checked', 'aria-selected', 'aria-pressed'].some(attr => element?.getAttribute(attr) === 'true'));
+      if (refChecked) { result[name] = true; ambiguous.delete(name); continue; }
       const own = checkbox || row;
       if (!own) continue;
       const aria = own.getAttribute('aria-checked');
@@ -124,6 +129,7 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
         typeof own.checked === 'boolean' ? own.checked :
         aria === 'true' || aria === 'false' ? aria === 'true' :
         own.matches('.selected, .checked');
+      if (result[name] === true) continue;
       if (Object.hasOwn(result, name) && result[name] !== value) ambiguous.add(name);
       else result[name] = value;
     }
@@ -133,15 +139,8 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
   const heading = page.getByText(/^Advertiser personali(?:\s*\(\s*\d+\s*\))?$/i)
     .filter({ visible: true }).first();
   await heading.waitFor({ timeout: 30000 });
-  const manual = process.env.SCALA_AWIN_FILTRI_MANUALI === '1';
   const correct = selection => categoryNames.every(name => selection[name] === !excluded.has(name));
-  if (manual) {
-    scalaStatus('Imposta in Awin le categorie desiderate, escludi Erotico e Vini, alcolici e tabacchi, torna alla pagina 1 e premi Invio qui.');
-    const prompt = require('node:readline/promises').createInterface({ input: process.stdin, output: process.stdout });
-    try { await prompt.question('Premi Invio quando i filtri sono applicati: '); }
-    finally { prompt.close(); }
-    await heading.waitFor({ timeout: 10000 });
-  } else {
+  {
     const reset = page.getByText('Reimposta ricerca', { exact: true }).filter({ visible: true });
     if (await reset.count() !== 1) throw new Error('Comando «Reimposta ricerca» non identificabile in Iscritto.');
     await reset.click({ timeout: 8000 });
@@ -184,7 +183,10 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
       const allowed = categoryNames.filter(name => !excluded.has(name));
       await settle(value => allowed.every(name => value[name] === true));
       for (const name of excluded) await clickIfNeeded(name, false);
-      // Validate the final selection without clicking any allowed subcategory.
+      // Use the reference's exact-label click only when the bulk action left a box off.
+      for (const name of allowed) {
+        if (selection[name] !== true) await clickIfNeeded(name, true);
+      }
       await settle(correct);
       if (!correct(selection)) {
         const unverified = categoryNames.filter(name => selection[name] !== !excluded.has(name))
@@ -268,10 +270,6 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
         // If the control changed, try the next visible control.
       }
     }
-    if (!additions.length && !page.isClosed()) {
-      scalaStatus('Awin: apri pagina ' + number + ' in «Iscritto» o aumenta i risultati per pagina. Attendo fino a 2 minuti.');
-      additions = await waitForNewRows(120000);
-    }
     if (!additions.length) {
       throw new Error('Pagina ' + number + ': nessun nuovo advertiser. Letti ' + joinedNames.size +
         ' di ' + first.total + '. Interrompo per evitare di scaricare listini non filtrati.');
@@ -280,23 +278,11 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
     additions.forEach(name => joinedNames.add(name));
     scalaStatus('Lettura: ' + joinedNames.size + '/' + first.total + ' advertiser');
   }
-  if (joinedNames.size < first.total && !page.isClosed()) {
-    scalaStatus('Letti ' + joinedNames.size + '/' + first.total +
-      '. In «Iscritto», aumenta «Risultati per pagina», poi torna alla prima pagina. Attendo fino a 2 minuti.');
-    let until = Date.now() + 120000;
-    while (joinedNames.size < first.total && Date.now() < until && !page.isClosed()) {
-      const additions = await waitForNewRows(Math.min(1000, until - Date.now()));
-      if (additions.length && joinedNames.size + additions.length <= first.total) {
-        additions.forEach(name => joinedNames.add(name));
-        scalaStatus('Lettura: ' + joinedNames.size + '/' + first.total + ' advertiser');
-      }
-    }
-  }
   if (joinedNames.size !== first.total) {
     throw new Error('Elenco incompleto: ' + joinedNames.size + '/' + first.total +
       ' nomi distinti. Possibili righe ripetute o omonimi; nessun download avviato.');
   }
-  if (!manual && !correct(await state())) throw new Error('I filtri di categoria sono cambiati. Nessun listino scaricato.');
+  if (!correct(await state())) throw new Error('I filtri di categoria sono cambiati. Nessun listino scaricato.');
   const selected = [...joinedNames];
   return { joined: selected, targets: selected };
 }
@@ -715,18 +701,16 @@ async function chooseCategory() {
 
 async function main() {
   const args = process.argv.slice(2).map(arg => arg === '--tutti-iscritti' ? 'P' : arg);
-  const manual = args.includes('--filtri-manuali');
   const dryRun = args.includes('--solo-verifica');
   const skipEmpty = args.includes('--salta-listini-vuoti');
   const localFlag = args.includes('--solo-locali');
-  const [choice, ...extra] = args.filter(arg => !['--solo-verifica', '--salta-listini-vuoti', '--solo-locali', '--filtri-manuali'].includes(arg));
+  const [choice, ...extra] = args.filter(arg => !['--solo-verifica', '--salta-listini-vuoti', '--solo-locali'].includes(arg));
   if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria | P | --tutti-iscritti | L | --solo-locali] [--solo-verifica | --salta-listini-vuoti]');
   const selection = choice === undefined && (localFlag || skipEmpty) ? 'locale'
     : choice === undefined ? await chooseCategory() : categoryChoice(choice);
   const localOnly = selection === 'locale' || localFlag || (selection === null && skipEmpty);
   if (localOnly && selection !== null && selection !== 'locale') throw new Error('Usa --solo-locali senza un numero di sottocategoria.');
   const personal = selection === 'personali';
-  if (manual && !personal) throw new Error('Usa --filtri-manuali con --tutti-iscritti.');
   if (personal && skipEmpty) throw new Error('Per scaricare gli advertiser personali usa P senza --salta-listini-vuoti.');
   const allCategories = selection === null && !localOnly;
   if (dryRun && (localOnly || allCategories)) throw new Error('Per la verifica scegli una sottocategoria diversa da 0.');
@@ -750,7 +734,7 @@ async function main() {
         await downloadScript('a4bf3cc0ebecadc7450c6180d42a2d2af6407bc2', 'scarica-listini-awin.cjs', downloadPath, personal ? null : category);
         console.log((dryRun ? 'Verifico il filtro Awin: ' : 'Scarico i listini Awin degli advertiser attivi: ') + category);
         run(process.execPath, [downloadPath, publisher], {
-          env: { ...process.env, SCALA_AWIN_FILTRI_MANUALI: manual ? '1' : '', AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '',
+          env: { ...process.env, AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '',
             SCALA_AWIN_HASH_PUBBLICATI: JSON.stringify(hashes), SCALA_AWIN_TUTTE: allCategories ? '1' : '' }
         });
         if (dryRun) return;

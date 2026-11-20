@@ -97,50 +97,116 @@ async function readAllPersonalAdvertisers(page) {
     .filter({ visible: true }).first();
   await heading.waitFor({ timeout: 30000 });
   const reset = page.getByText('Reimposta ricerca', { exact: true }).filter({ visible: true });
-  if (await reset.count() !== 1) throw new Error('Impossibile azzerare i filtri degli advertiser.');
-  await reset.click();
+  if (await reset.count() !== 1) throw new Error('Comando «Reimposta ricerca» non identificabile in Iscritto.');
+  await reset.click({ timeout: 8000 });
   await heading.waitFor({ timeout: 20000 });
-  const zero = page.getByText(/^Advertiser personali\s*\(\s*0\s*\)$/i).filter({ visible: true });
-  const nextText = /^(?:pagina )?successiv[ao](?:\s*[›»])?$/i;
-  const next = page.getByRole('link', { name: nextText }).or(page.getByRole('button', { name: nextText }))
-    .or(page.getByText(nextText)).filter({ visible: true }).first();
-  const names = new Set();
-  let expected, previous;
-  for (let number = 1; ; number++) {
-    const until = Date.now() + 25000;
-    let current, signature, since;
-    while (Date.now() < until) {
-      const rows = await zero.isVisible() ? { names: [], total: 0 } : await page.evaluate(inspectPersonalAdvertisers, false);
-      const key = JSON.stringify(rows.names);
-      if (!Array.isArray(rows.names) || !Number.isSafeInteger(rows.total) ||
-          (expected !== undefined && rows.total !== expected) || key === previous) signature = undefined;
-      else if (signature !== key) { signature = key; since = Date.now(); }
-      else if (Date.now() - since >= 1200) { current = rows; break; }
-      await page.waitForTimeout(250);
+  const first = await readAdvertiserPage(page);
+  if (!Number.isInteger(first.total) || first.total < first.names.length || !first.names.length) {
+    throw new Error('Elenco Iscritto vuoto o totale non verificabile.');
+  }
+  const joinedNames = new Set(first.names);
+  scalaStatus('Lettura: ' + joinedNames.size + '/' + first.total + ' advertiser');
+
+  async function waitForNewRows(timeout = 10000) {
+    const deadline = Date.now() + timeout;
+    do {
+      const current = await page.evaluate(inspectPersonalAdvertisers, false).catch(() => null);
+      const additions = current?.total === first.total ? current.names?.filter(name => !joinedNames.has(name)) : [];
+      if (additions?.length) {
+        return additions;
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    } while (!page.isClosed() && Date.now() < deadline);
+    return [];
+  }
+
+  async function expandResults() {
+    const sizeLabel = page.getByText(/^Risultati per pagina\s*:?$/i).filter({ visible: true });
+    if (await sizeLabel.count() === 1) {
+      const currentValue = sizeLabel.locator('xpath=..').getByText(String(first.names.length), { exact: true })
+        .filter({ visible: true });
+      try {
+        await (await currentValue.count() === 1 ? currentValue : sizeLabel).click({ timeout: 5000 });
+        for (const size of [100, 50, 25, 20]) {
+          if (size <= first.names.length) continue;
+          const value = page.getByText(String(size), { exact: true }).filter({ visible: true });
+          if (await value.count() !== 1) continue;
+          await value.click({ timeout: 5000 });
+          const additions = await waitForNewRows();
+          return additions;
+        }
+      } catch {
+        // Manual recovery remains available.
+      }
     }
-    if (!current) throw new Error('Pagina ' + number + ' non verificabile: ' + names.size + '/' + (expected ?? '?') + ' advertiser letti.');
-    expected = current.total;
-    previous = JSON.stringify(current.names);
-    const before = names.size;
-    for (const name of current.names) names.add(name);
-    console.log('Awin | Advertiser personali: ' + names.size + ' di ' + expected + ' | pagina ' + number);
-    if (names.size === expected) return { joined: [...names], targets: [...names] };
-    if (names.size > expected || names.size === before) {
-      throw new Error('Elenco incompleto: ' + names.size + '/' + expected + ' advertiser.');
+    return [];
+  }
+
+  let expanded = false;
+  for (let number = 2; joinedNames.size && first.total > joinedNames.size; number++) {
+    const nextLabel = /^(successiv[ao]|next)(?:\s*[›»→])?$/i;
+    const pageLabel = new RegExp('^' + number + '$');
+    const controls = [
+      ['Successivo', page.getByText(nextLabel).filter({ visible: true })],
+      ['Successivo', page.getByRole('button', { name: nextLabel }).or(
+        page.getByRole('link', { name: nextLabel })
+      ).filter({ visible: true })],
+      ['numero ' + number, page.getByText(String(number), { exact: true }).filter({ visible: true })],
+      ['pagina ' + number, page.getByRole('link', { name: pageLabel }).or(
+        page.getByRole('button', { name: pageLabel })
+      ).filter({ visible: true })]
+    ];
+    let additions = [];
+    for (const [, control] of controls) {
+      if (await control.count() !== 1) continue;
+      try {
+        await control.click({ timeout: 5000 });
+        additions = await waitForNewRows();
+        if (additions.length) break;
+      } catch {
+        // If the control changed, try the next visible control.
+      }
     }
-    const following = number + 1;
-    const route = '/merchant-directory/index/tab/active/page/' + following;
-    const numbered = page.locator('a[href$="' + route + '"], a[href$="' + route + '/"]')
-      .or(page.getByRole('link', { name: String(following), exact: true }))
-      .or(page.getByRole('button', { name: String(following), exact: true }))
-      .filter({ visible: true }).first();
-    if (await numbered.isVisible() && await numbered.isEnabled()) {
-      await numbered.click();
-    } else if (await next.isVisible() && await next.isEnabled()) {
-      await next.click();
-    } else {
-      await open(page, route);
+    if (!additions.length && number === 2 && !expanded && !page.isClosed()) {
+      expanded = true;
+      additions = await expandResults();
+      if (additions.length) number--; // A page-size change can keep the browser on page 1.
     }
+    if (!additions.length && !page.isClosed()) {
+      scalaStatus('Awin: apri pagina ' + number + ' in «Iscritto» o aumenta i risultati per pagina. Attendo fino a 2 minuti.');
+      additions = await waitForNewRows(120000);
+    }
+    if (!additions.length) {
+      throw new Error('Pagina ' + number + ': nessun nuovo advertiser. Letti ' + joinedNames.size +
+        ' di ' + first.total + '. Interrompo per evitare di scaricare listini non filtrati.');
+    }
+    if (joinedNames.size + additions.length > first.total) throw new Error('Il totale degli iscritti è cambiato durante la lettura.');
+    additions.forEach(name => joinedNames.add(name));
+    scalaStatus('Lettura: ' + joinedNames.size + '/' + first.total + ' advertiser');
+  }
+  const selected = [...joinedNames];
+  return { joined: selected, targets: selected };
+}
+
+async function openAwinRoute(page, route) {
+  const label = route.startsWith('/merchant-directory') ? 'Iscritto' : 'Create-a-Feed';
+  const temporary = /^(?:HTTP (?:408|429|5\d\d)|ERR_(?:ABORTED|TIMED_OUT|CONNECTION_RESET|CONNECTION_CLOSED|CONNECTION_TIMED_OUT|NETWORK_CHANGED|INTERNET_DISCONNECTED|NAME_NOT_RESOLVED)|TIMEOUT)$/;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    let reason;
+    try {
+      const response = await page.goto(account + route, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      if (response?.ok()) return;
+      const status = response?.status();
+      reason = Number.isInteger(status) ? 'HTTP ' + status : 'nessuna risposta HTTP';
+    } catch (error) {
+      const info = String(error?.message);
+      reason = info.match(/\bERR_[A-Z0-9_]+\b/)?.[0] ||
+        (error?.name === 'TimeoutError' ? 'TIMEOUT' : page.isClosed() ? 'finestra chiusa' : 'errore del browser');
+    }
+    const message = 'Navigazione Awin — ' + label + ': ' + reason;
+    if (attempt === 3 || page.isClosed() || !temporary.test(reason)) throw new Error(message);
+    console.log(message + ' (tentativo ' + attempt + ' di 3; riprovo).');
+    await new Promise(resolve => setTimeout(resolve, attempt * 2000));
   }
 }
 
@@ -172,6 +238,9 @@ async function downloadScript(revision, name, destination, category) {
   });
   if (!response.ok) throw new Error('Impossibile scaricare ' + name + ' da GitHub (HTTP ' + response.status + ')');
   let script = await response.text();
+  const openFunction = /^async function open\(page, route\) \{[\s\S]*?^\}/m;
+  if (!openFunction.test(script)) throw new Error('Navigazione Awin non riconosciuta.');
+  script = script.replace(openFunction, () => openAwinRoute.toString().replace('function openAwinRoute(', 'function open('));
   const summary = "    console.log('Listini salvati: ' + completed + ' di ' + targets.length);";
   if (script.split(summary).length !== 2) throw new Error('Versione dello scaricatore Awin non riconosciuta.');
   const hook = 'const active = await readJoinedAdvertisers(page);';

@@ -154,7 +154,9 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
       }
       if (await retail.count() !== 1) throw new Error('Retail & Shopping non identificabile in Iscritto.');
       if (!categoryNames.every(name => selection[name] === true)) {
-        await retail.click({ timeout: 5000 });
+        const parentBox = page.getByRole('checkbox', { name: /^Retail\\s*&\\s*Shopping$/i }).filter({ visible: true });
+        if (await parentBox.count() === 1) await parentBox.setChecked(true, { timeout: 5000 });
+        else await retail.click({ timeout: 5000 });
         await page.waitForTimeout(800);
         selection = await state();
       }
@@ -183,10 +185,6 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
       const allowed = categoryNames.filter(name => !excluded.has(name));
       await settle(value => allowed.every(name => value[name] === true));
       for (const name of excluded) await clickIfNeeded(name, false);
-      // Use the reference's exact-label click only when the bulk action left a box off.
-      for (const name of allowed) {
-        if (selection[name] !== true) await clickIfNeeded(name, true);
-      }
       await settle(correct);
       if (!correct(selection)) {
         const unverified = categoryNames.filter(name => selection[name] !== !excluded.has(name))

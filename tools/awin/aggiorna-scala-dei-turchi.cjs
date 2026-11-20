@@ -118,17 +118,29 @@ async function readAllPersonalAdvertisers(page) {
       else if (Date.now() - since >= 1200) { current = rows; break; }
       await page.waitForTimeout(250);
     }
-    if (!current) throw new Error('Pagina ' + number + ' degli advertiser personali non verificabile.');
+    if (!current) throw new Error('Pagina ' + number + ' non verificabile: ' + names.size + '/' + (expected ?? '?') + ' advertiser letti.');
     expected = current.total;
     previous = JSON.stringify(current.names);
     const before = names.size;
     for (const name of current.names) names.add(name);
     console.log('Awin | Advertiser personali: ' + names.size + ' di ' + expected + ' | pagina ' + number);
     if (names.size === expected) return { joined: [...names], targets: [...names] };
-    if (names.size > expected || names.size === before || !await next.isVisible() || !await next.isEnabled()) {
-      throw new Error('Elenco incompleto: ' + names.size + ' di ' + expected + ' advertiser personali.');
+    if (names.size > expected || names.size === before) {
+      throw new Error('Elenco incompleto: ' + names.size + '/' + expected + ' advertiser.');
     }
-    await next.click();
+    const following = number + 1;
+    const route = '/merchant-directory/index/tab/active/page/' + following;
+    const numbered = page.locator('a[href$="' + route + '"], a[href$="' + route + '/"]')
+      .or(page.getByRole('link', { name: String(following), exact: true }))
+      .or(page.getByRole('button', { name: String(following), exact: true }))
+      .filter({ visible: true }).first();
+    if (await numbered.isVisible() && await numbered.isEnabled()) {
+      await numbered.click();
+    } else if (await next.isVisible() && await next.isEnabled()) {
+      await next.click();
+    } else {
+      await open(page, route);
+    }
   }
 }
 
@@ -240,11 +252,7 @@ const scalaError = console.error.bind(console);
 if (process.env.SCALA_AWIN_DETTAGLI !== '1') {
   console.log = (...args) => { if (String(args[0]).includes(' | errore al passaggio')) scalaStatus(...args); };
   console.warn = () => {};
-  console.error = message => scalaError(
-    /pagin|elenco incompleto/i.test(String(message))
-      ? 'Elenco incompleto: impossibile confermare tutti gli advertiser.'
-      : String(message).replace(/^Awin [|] /, '')
-  );
+  console.error = message => scalaError(String(message).replace(/^Awin [|] /, ''));
 }
 const scalaPublished = new Set(JSON.parse(process.env.SCALA_AWIN_HASH_PUBBLICATI || '[]'));
 let scalaUnchanged = 0;

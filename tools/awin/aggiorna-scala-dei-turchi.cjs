@@ -133,55 +133,64 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
   const heading = page.getByText(/^Advertiser personali(?:\s*\(\s*\d+\s*\))?$/i)
     .filter({ visible: true }).first();
   await heading.waitFor({ timeout: 30000 });
-  const reset = page.getByText('Reimposta ricerca', { exact: true }).filter({ visible: true });
-  if (await reset.count() !== 1) throw new Error('Comando «Reimposta ricerca» non identificabile in Iscritto.');
-  await reset.click({ timeout: 8000 });
-  await heading.waitFor({ timeout: 20000 });
+  const manual = process.env.SCALA_AWIN_FILTRI_MANUALI === '1';
   const correct = selection => categoryNames.every(name => selection[name] === !excluded.has(name));
-  let selection = await state();
-  if (!correct(selection)) {
-    const retail = page.getByText(/^Retail\s*&\s*Shopping(?:\s*\([\d.,]+\))?$/i).filter({ visible: true });
-    if (!await retail.count()) {
-      const sector = page.getByText(/^Settori?:?$/i).filter({ visible: true });
-      if (await sector.count() === 1) await sector.click({ timeout: 3000 });
-    }
-    if (await retail.count() !== 1) throw new Error('Retail & Shopping non identificabile in Iscritto.');
-    if (!categoryNames.every(name => selection[name] === true)) {
-      await retail.click({ timeout: 5000 });
-      await page.waitForTimeout(800);
-      selection = await state();
-    }
-    const settle = async (ready, timeout = 4000) => {
-      const deadline = Date.now() + timeout;
-      do {
-        selection = await state();
-        if (ready(selection)) return;
-        await page.waitForTimeout(250);
-      } while (Date.now() < deadline && !page.isClosed());
-    };
-    const clickIfNeeded = async (name, desired) => {
-      selection = await state();
-      if (selection[name] === desired) return;
-      const pattern = new RegExp('^' + RegExp.escape(name) + '(?:\\s*\\([\\d.,]+\\))?$', 'i');
-      const checkbox = page.getByRole('checkbox', { name: pattern }).filter({ visible: true });
-      const label = page.getByText(pattern).filter({ visible: true });
-      if (await checkbox.count() === 1) {
-        // setChecked verifies the target state and avoids toggling an already selected box.
-        await checkbox.setChecked(desired, { timeout: 2500 }).catch(() => {});
-      } else if (typeof selection[name] === 'boolean' && await label.count() === 1) {
-        await label.click({ timeout: 2500 }).catch(() => {});
-      }
-      await settle(value => value[name] === desired, 1200);
-    };
-    const allowed = categoryNames.filter(name => !excluded.has(name));
-    await settle(value => allowed.every(name => value[name] === true));
-    for (const name of excluded) await clickIfNeeded(name, false);
-    // Validate the final selection without clicking any allowed subcategory.
-    await settle(correct);
+  if (manual) {
+    scalaStatus('Imposta in Awin le categorie desiderate, escludi Erotico e Vini, alcolici e tabacchi, torna alla pagina 1 e premi Invio qui.');
+    const prompt = require('node:readline/promises').createInterface({ input: process.stdin, output: process.stdout });
+    try { await prompt.question('Premi Invio quando i filtri sono applicati: '); }
+    finally { prompt.close(); }
+    await heading.waitFor({ timeout: 10000 });
+  } else {
+    const reset = page.getByText('Reimposta ricerca', { exact: true }).filter({ visible: true });
+    if (await reset.count() !== 1) throw new Error('Comando «Reimposta ricerca» non identificabile in Iscritto.');
+    await reset.click({ timeout: 8000 });
+    await heading.waitFor({ timeout: 20000 });
+    let selection = await state();
     if (!correct(selection)) {
-      const unverified = categoryNames.filter(name => selection[name] !== !excluded.has(name))
-        .map(name => name + (typeof selection[name] === 'boolean' ? ' (spunta errata)' : ' (stato non leggibile)'));
-      throw new Error('Selezione Retail & Shopping non confermata: ' + unverified.join(', ') + '. Nessun listino scaricato.');
+      const retail = page.getByText(/^Retail\s*&\s*Shopping(?:\s*\([\d.,]+\))?$/i).filter({ visible: true });
+      if (!await retail.count()) {
+        const sector = page.getByText(/^Settori?:?$/i).filter({ visible: true });
+        if (await sector.count() === 1) await sector.click({ timeout: 3000 });
+      }
+      if (await retail.count() !== 1) throw new Error('Retail & Shopping non identificabile in Iscritto.');
+      if (!categoryNames.every(name => selection[name] === true)) {
+        await retail.click({ timeout: 5000 });
+        await page.waitForTimeout(800);
+        selection = await state();
+      }
+      const settle = async (ready, timeout = 4000) => {
+        const deadline = Date.now() + timeout;
+        do {
+          selection = await state();
+          if (ready(selection)) return;
+          await page.waitForTimeout(250);
+        } while (Date.now() < deadline && !page.isClosed());
+      };
+      const clickIfNeeded = async (name, desired) => {
+        selection = await state();
+        if (selection[name] === desired) return;
+        const pattern = new RegExp('^' + RegExp.escape(name) + '(?:\\s*\\([\\d.,]+\\))?$', 'i');
+        const checkbox = page.getByRole('checkbox', { name: pattern }).filter({ visible: true });
+        const label = page.getByText(pattern).filter({ visible: true });
+        if (await checkbox.count() === 1) {
+          // setChecked verifies the target state and avoids toggling an already selected box.
+          await checkbox.setChecked(desired, { timeout: 2500 }).catch(() => {});
+        } else if (typeof selection[name] === 'boolean' && await label.count() === 1) {
+          await label.click({ timeout: 2500 }).catch(() => {});
+        }
+        await settle(value => value[name] === desired, 1200);
+      };
+      const allowed = categoryNames.filter(name => !excluded.has(name));
+      await settle(value => allowed.every(name => value[name] === true));
+      for (const name of excluded) await clickIfNeeded(name, false);
+      // Validate the final selection without clicking any allowed subcategory.
+      await settle(correct);
+      if (!correct(selection)) {
+        const unverified = categoryNames.filter(name => selection[name] !== !excluded.has(name))
+          .map(name => name + (typeof selection[name] === 'boolean' ? ' (spunta errata)' : ' (stato non leggibile)'));
+        throw new Error('Selezione Retail & Shopping non confermata: ' + unverified.join(', ') + '. Nessun listino scaricato.');
+      }
     }
   }
   await page.waitForTimeout(1200);
@@ -287,7 +296,7 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
     throw new Error('Elenco incompleto: ' + joinedNames.size + '/' + first.total +
       ' nomi distinti. Possibili righe ripetute o omonimi; nessun download avviato.');
   }
-  if (!correct(await state())) throw new Error('I filtri di categoria sono cambiati. Nessun listino scaricato.');
+  if (!manual && !correct(await state())) throw new Error('I filtri di categoria sono cambiati. Nessun listino scaricato.');
   const selected = [...joinedNames];
   return { joined: selected, targets: selected };
 }
@@ -706,16 +715,18 @@ async function chooseCategory() {
 
 async function main() {
   const args = process.argv.slice(2).map(arg => arg === '--tutti-iscritti' ? 'P' : arg);
+  const manual = args.includes('--filtri-manuali');
   const dryRun = args.includes('--solo-verifica');
   const skipEmpty = args.includes('--salta-listini-vuoti');
   const localFlag = args.includes('--solo-locali');
-  const [choice, ...extra] = args.filter(arg => !['--solo-verifica', '--salta-listini-vuoti', '--solo-locali'].includes(arg));
+  const [choice, ...extra] = args.filter(arg => !['--solo-verifica', '--salta-listini-vuoti', '--solo-locali', '--filtri-manuali'].includes(arg));
   if (extra.length) throw new Error('Uso: node aggiorna-scala-dei-turchi.cjs [numero sottocategoria | P | --tutti-iscritti | L | --solo-locali] [--solo-verifica | --salta-listini-vuoti]');
   const selection = choice === undefined && (localFlag || skipEmpty) ? 'locale'
     : choice === undefined ? await chooseCategory() : categoryChoice(choice);
   const localOnly = selection === 'locale' || localFlag || (selection === null && skipEmpty);
   if (localOnly && selection !== null && selection !== 'locale') throw new Error('Usa --solo-locali senza un numero di sottocategoria.');
   const personal = selection === 'personali';
+  if (manual && !personal) throw new Error('Usa --filtri-manuali con --tutti-iscritti.');
   if (personal && skipEmpty) throw new Error('Per scaricare gli advertiser personali usa P senza --salta-listini-vuoti.');
   const allCategories = selection === null && !localOnly;
   if (dryRun && (localOnly || allCategories)) throw new Error('Per la verifica scegli una sottocategoria diversa da 0.');
@@ -739,7 +750,7 @@ async function main() {
         await downloadScript('a4bf3cc0ebecadc7450c6180d42a2d2af6407bc2', 'scarica-listini-awin.cjs', downloadPath, personal ? null : category);
         console.log((dryRun ? 'Verifico il filtro Awin: ' : 'Scarico i listini Awin degli advertiser attivi: ') + category);
         run(process.execPath, [downloadPath, publisher], {
-          env: { ...process.env, AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '',
+          env: { ...process.env, SCALA_AWIN_FILTRI_MANUALI: manual ? '1' : '', AWIN_LISTINI_DIR: staging, SCALA_AWIN_SOLO_VERIFICA: dryRun ? '1' : '',
             SCALA_AWIN_HASH_PUBBLICATI: JSON.stringify(hashes), SCALA_AWIN_TUTTE: allCategories ? '1' : '' }
         });
         if (dryRun) return;

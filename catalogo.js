@@ -7,7 +7,6 @@ const merchant = document.getElementById('venditore');
 const category = document.getElementById('categoria');
 const minPrice = document.getElementById('prezzo-minimo');
 const maxPrice = document.getElementById('prezzo-massimo');
-const shuffleButton = document.getElementById('mescola-sconti');
 const sortOrder = document.getElementById('ordinamento');
 const collator = new Intl.Collator('it', { sensitivity: 'base', numeric: true });
 const blocks = new Map();
@@ -229,10 +228,6 @@ function start() {
 more.addEventListener('click', () => manifest?.count ? load() : start());
 merchant.addEventListener('change', () => { if (manifest) reset(); });
 category.addEventListener('change', () => { if (manifest) reset(); });
-shuffleButton?.addEventListener('click', () => {
-  sortOrder.value = 'shuffle';
-  if (manifest) reset();
-});
 sortOrder.addEventListener('change', () => { if (manifest) reset(); });
 function updatePriceButtons() {
   for (const button of priceButtons) button.setAttribute('aria-pressed', String(button.dataset.priceBand === activeBand));

@@ -248,6 +248,9 @@ for (const button of priceButtons) button.addEventListener('click', () => {
   if (manifest) reset();
 });
 function showPrices() {
+  const track = document.getElementById('barra-prezzi');
+  track.style.setProperty('--price-low', (minPrice.valueAsNumber / Number(minPrice.max) * 100) + '%');
+  track.style.setProperty('--price-high', (maxPrice.valueAsNumber / Number(maxPrice.max) * 100) + '%');
   for (const [input, id] of [[minPrice, 'minimo'], [maxPrice, 'massimo']]) {
     const label = input === maxPrice && input.value === input.max ? 'Nessun limite' : euro.format(input.valueAsNumber);
     document.getElementById('valore-' + id).textContent = label;
@@ -256,10 +259,8 @@ function showPrices() {
 }
 showPrices();
 for (const input of [search, minPrice, maxPrice]) input.addEventListener('input', () => {
-  if (minPrice.valueAsNumber > maxPrice.valueAsNumber) {
-    if (input === minPrice) maxPrice.value = minPrice.value;
-    if (input === maxPrice) minPrice.value = maxPrice.value;
-  }
+  if (input === minPrice) minPrice.value = Math.min(minPrice.valueAsNumber, Number(maxPrice.max) - Number(maxPrice.step), maxPrice.valueAsNumber);
+  if (input === maxPrice) maxPrice.value = Math.max(maxPrice.valueAsNumber, minPrice.valueAsNumber);
   showPrices();
   clearTimeout(timer);
   if (manifest) timer = setTimeout(reset, 200);

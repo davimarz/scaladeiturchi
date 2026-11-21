@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#ffffff">
   <meta name="description" content="Scopri e confronta le offerte dei negozi partner su Scala dei Turchi.">
   <title>Scala dei Turchi · Promozioni</title>
-  <link rel="stylesheet" href="./stile.css?v=promozioni-6">
-  <script src="./catalogo.js?v=promozioni-6" defer></script>
+  <link rel="stylesheet" href="./stile.css?v=promozioni-7">
+  <script src="./catalogo.js?v=promozioni-7" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#promozioni">Vai alle promozioni</a>
@@ -23,9 +23,8 @@
         <h1 id="promotionsHeading">Promozioni</h1>
         <p>Link affiliati · Verifica prezzo e disponibilità sul sito del venditore.</p>
       </div>
-      <div class="promotion-filters" role="group" aria-label="Filtra le promozioni per sconto">
+      <div class="promotion-filters" role="group" aria-label="Ripristina le promozioni">
         <button type="button" data-price-band="all" aria-pressed="true">Tutti</button>
-        <button type="button" data-price-band="discounted" id="solo-sconti" aria-pressed="false">Scontati</button>
       </div>
       <details class="promotion-sort-box" open>
         <summary>Filtra e ordina le offerte</summary>
@@ -35,8 +34,8 @@
           </label>
           <label>Categoria <select id="categoria"><option value="">Tutte le categorie</option></select></label>
           <label>Venditore <select id="venditore" disabled><option value="">Tutti i venditori</option></select></label>
-          <label>Prezzo minimo (€) <input id="prezzo-minimo" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Nessun minimo"></label>
-          <label>Prezzo massimo (€) <input id="prezzo-massimo" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Nessun massimo"></label>
+          <label class="price-slider">Prezzo minimo: <output id="valore-minimo" for="prezzo-minimo">0 €</output><input id="prezzo-minimo" type="range" min="0" max="2000" step="1" value="0"></label>
+          <label class="price-slider">Prezzo massimo: <output id="valore-massimo" for="prezzo-massimo">Nessun limite</output><input id="prezzo-massimo" type="range" min="0" max="2000" step="1" value="2000"></label>
           <label class="sort-label">Ordinamento <select id="ordinamento">
             <option value="">Nessuno</option>
             <option value="discount" selected>Sconto maggiore</option>

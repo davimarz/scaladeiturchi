@@ -204,15 +204,21 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
   const joinedNames = new Set(first.names);
   let pageRows = first.rowCount ?? first.names.length;
 
-  async function waitForNewRows(timeout = 10000) {
+  async function waitForNewRows(expectedRows, timeout = 10000) {
     const deadline = Date.now() + timeout;
+    let signature, stableSince;
     do {
       const current = await page.evaluate(inspectPersonalAdvertisers, false).catch(() => null);
       const additions = current?.total === first.total ? current.names?.filter(name => !joinedNames.has(name)) : [];
-      if (additions?.length) {
-        pageRows = current.rowCount ?? current.names.length;
-        return additions;
-      }
+      const rows = current?.rowCount ?? current?.names?.length;
+      if (additions?.length && (expectedRows ? rows === expectedRows : rows > pageRows)) {
+        const key = JSON.stringify(current.names);
+        if (key !== signature) { signature = key; stableSince = Date.now(); }
+        else if (Date.now() - stableSince >= 1000) {
+          pageRows = rows;
+          return additions;
+        }
+      } else signature = undefined;
       await new Promise(resolve => setTimeout(resolve, 250));
     } while (!page.isClosed() && Date.now() < deadline);
     return [];
@@ -251,13 +257,13 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
     const nextLabel = /^(successiv[ao]|next)(?:\s*[›»→])?$/i;
     const pageLabel = new RegExp('^' + number + '$');
     const controls = [
-      ['Successivo', page.getByText(nextLabel).filter({ visible: true })],
-      ['Successivo', page.getByRole('button', { name: nextLabel }).or(
-        page.getByRole('link', { name: nextLabel })
-      ).filter({ visible: true })],
       ['numero ' + number, page.getByText(String(number), { exact: true }).filter({ visible: true })],
       ['pagina ' + number, page.getByRole('link', { name: pageLabel }).or(
         page.getByRole('button', { name: pageLabel })
+      ).filter({ visible: true })],
+      ['Successivo', page.getByText(nextLabel).filter({ visible: true })],
+      ['Successivo', page.getByRole('button', { name: nextLabel }).or(
+        page.getByRole('link', { name: nextLabel })
       ).filter({ visible: true })]
     ];
     let additions = [];
@@ -265,7 +271,7 @@ async function readAllPersonalAdvertisers(page, _category, categoryNames) {
       if (await control.count() !== 1) continue;
       try {
         await control.click({ timeout: 5000 });
-        additions = await waitForNewRows();
+        additions = await waitForNewRows(Math.min(pageSize, first.total - (number - 1) * pageSize));
         if (additions.length) break;
       } catch {
         // If the control changed, try the next visible control.

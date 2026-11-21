@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#ffffff">
   <meta name="description" content="Scopri e confronta le offerte dei negozi partner su Scala dei Turchi.">
   <title>Scala dei Turchi · Promozioni</title>
-  <link rel="stylesheet" href="./stile.css?v=promozioni-4">
-  <script src="./catalogo.js?v=promozioni-5" defer></script>
+  <link rel="stylesheet" href="./stile.css?v=promozioni-6">
+  <script src="./catalogo.js?v=promozioni-6" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#promozioni">Vai alle promozioni</a>
@@ -23,13 +23,9 @@
         <h1 id="promotionsHeading">Promozioni</h1>
         <p>Link affiliati · Verifica prezzo e disponibilità sul sito del venditore.</p>
       </div>
-      <div class="promotion-filters" role="group" aria-label="Filtra le promozioni per sconto e prezzo">
+      <div class="promotion-filters" role="group" aria-label="Filtra le promozioni per sconto">
         <button type="button" data-price-band="all" aria-pressed="true">Tutti</button>
         <button type="button" data-price-band="discounted" id="solo-sconti" aria-pressed="false">Scontati</button>
-        <button type="button" data-price-band="low" aria-pressed="false">0–10 €</button>
-        <button type="button" data-price-band="mid" aria-pressed="false">10–50 €</button>
-        <button type="button" data-price-band="high" aria-pressed="false">50–200 €</button>
-        <button type="button" data-price-band="top" aria-pressed="false">Oltre 200 €</button>
       </div>
       <details class="promotion-sort-box" open>
         <summary>Filtra e ordina le offerte</summary>
@@ -52,7 +48,7 @@
           <button type="button" id="mescola-sconti" class="sort-label">Mescola gli sconti</button>
         </div>
       </details>
-      <div class="promotion-result-bar"><p id="stato" role="status">Caricamento delle promozioni…</p><button type="button" id="azzera-filtri" hidden>Azzera filtri</button></div>
+      <div class="promotion-result-bar"><p id="stato" role="status">Caricamento delle promozioni…</p></div>
       <div id="offerte" class="offerte" aria-label="Prodotti in promozione" aria-busy="true"></div>
       <div class="azioni-catalogo">
         <button id="altre" type="button" hidden>Mostra altri prodotti</button>

@@ -29,7 +29,13 @@ input::placeholder{color:var(--muted);opacity:1}
 select option{background:var(--paper);color:var(--ink)}
 button,.torna-inizio{min-height:44px;padding:7px 12px;border:1px solid var(--ink);background:var(--paper);color:var(--ink);font-weight:700;cursor:pointer;touch-action:manipulation}
 .promotion-filters{margin-bottom:10px}
-.price-slider input[type=range]{width:100%;min-height:44px;accent-color:var(--ink);padding:0}
+.price-slider-labels{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.price-slider-track{position:relative;height:44px;--price-low:0%;--price-high:100%}
+.price-slider-track::before{content:"";position:absolute;inset:19px 11px;height:6px;border-radius:4px;background:linear-gradient(to right,#aaa var(--price-low),var(--ink) var(--price-low),var(--ink) var(--price-high),#aaa var(--price-high))}
+.price-slider-track input[type=range]{appearance:none;position:absolute;inset:0;width:100%;height:44px;min-height:0;padding:0;margin:0;border:0;background:transparent;pointer-events:none}
+.price-slider-track input:focus{z-index:2}
+.price-slider-track input::-webkit-slider-thumb{appearance:none;width:22px;height:22px;border:2px solid var(--paper);border-radius:50%;background:var(--ink);pointer-events:auto;cursor:grab}
+.price-slider-track input::-moz-range-thumb{box-sizing:border-box;width:22px;height:22px;border:2px solid var(--paper);border-radius:50%;background:var(--ink);pointer-events:auto;cursor:grab}
 .price-slider output{font-weight:bold}
 .promotion-filters button{padding:4px;font-size:12px}
 .promotion-filters button[aria-pressed="true"],#altre{background:var(--ink);color:var(--paper)}

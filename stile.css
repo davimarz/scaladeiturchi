@@ -28,11 +28,10 @@ input::placeholder{color:var(--muted);opacity:1}
 #cerca{min-height:48px;padding:10px 12px}
 select option{background:var(--paper);color:var(--ink)}
 button,.torna-inizio{min-height:44px;padding:7px 12px;border:1px solid var(--ink);background:var(--paper);color:var(--ink);font-weight:700;cursor:pointer;touch-action:manipulation}
-.promotion-filters{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;margin-bottom:10px}
+.promotion-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:10px}
 .promotion-filters button{padding:4px;font-size:12px}
 .promotion-filters button[aria-pressed="true"],#altre{background:var(--ink);color:var(--paper)}
 .promotion-result-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-#azzera-filtri{font-size:14px}
 .offerte{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:stretch}
 .cisalfa-product-card{position:relative;display:flex;flex-direction:column;min-width:0;padding:8px;border:2px solid var(--ink);background:var(--paper);text-decoration:none;color:var(--ink);gap:5px}
 .product-photo-frame{width:100%;aspect-ratio:1;background:var(--paper);border-bottom:2px solid var(--ink);overflow:hidden}
@@ -57,6 +56,6 @@ footer a{color:inherit;min-height:44px;display:inline-flex;align-items:center}
 .skip-link{position:absolute;left:16px;top:-100px;z-index:10;background:#fff;color:#050505;padding:12px;border:2px solid #050505}
 .skip-link:focus{top:10px}
 @media(min-width:640px){.offerte{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:479px){.promotion-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.promotion-sort-controls{grid-template-columns:1fr}.brand-mark{width:52px;height:52px}}
+@media(max-width:479px){.promotion-sort-controls{grid-template-columns:1fr}.brand-mark{width:52px;height:52px}}
 @media(max-width:390px){.offerte{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}

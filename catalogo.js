@@ -201,7 +201,7 @@ async function load() {
   const order = sortOrder.value === 'discount' ? '' : sortOrder.value;
   const discounted = order === 'shuffle' || discountOnly.getAttribute('aria-pressed') === 'true';
   const matches = item => (!seller || item.merchant === seller) && (!selected || selected === categoryFamily(item.category)) &&
-    price(item.price) >= lower && price(item.price) <= upper && (!(activeBand === 'mid' || activeBand === 'high') || price(item.price) > lower) && (!discounted || onSale(item)) &&
+    price(item.price) >= lower && price(item.price) <= upper && (!discounted || onSale(item)) &&
     terms.every(term => normalize([item.name, item.brand, item.merchant].join(' ')).includes(term));
   try {
     // An explicit sort must see all results before showing the first page.
@@ -306,8 +306,9 @@ function updatePriceButtons() {
 }
 for (const button of priceButtons) button.addEventListener('click', () => {
   activeBand = button.dataset.priceBand;
-  minPrice.value = activeBand === 'mid' ? '50' : activeBand === 'high' ? '150' : '';
-  maxPrice.value = activeBand === 'low' ? '50' : activeBand === 'mid' ? '150' : '';
+  const [min, max] = ({ low: ['0', '10'], mid: ['10.01', '50'], high: ['50.01', '200'], top: ['200.01', ''] })[activeBand] ?? ['', ''];
+  minPrice.value = min;
+  maxPrice.value = max;
   updatePriceButtons();
   if (manifest) reset();
 });

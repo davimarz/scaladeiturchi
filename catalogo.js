@@ -12,7 +12,6 @@ const sortOrder = document.getElementById('ordinamento');
 const discountOnly = document.getElementById('solo-sconti');
 const collator = new Intl.Collator('it', { sensitivity: 'base', numeric: true });
 const blocks = new Map();
-const resetButton = document.getElementById('azzera-filtri');
 const priceButtons = [...document.querySelectorAll('[data-price-band]')];
 let activeBand = 'all';
 const euro = new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR' });
@@ -208,8 +207,6 @@ function reset() {
   offset = 0;
   pending = [];
   grid.replaceChildren();
-  resetButton.hidden = !search.value.trim() && !category.value && !merchant.value &&
-    !minPrice.value && !maxPrice.value && (!sortOrder.value || sortOrder.value === 'discount') && discountOnly.getAttribute('aria-pressed') !== 'true';
   void load();
 }
 function start() {
@@ -243,23 +240,15 @@ function updatePriceButtons() {
 }
 for (const button of priceButtons) button.addEventListener('click', () => {
   activeBand = button.dataset.priceBand;
-  const [min, max] = ({ low: ['0', '10'], mid: ['10.01', '50'], high: ['50.01', '200'], top: ['200.01', ''] })[activeBand] ?? ['', ''];
-  minPrice.value = min;
-  maxPrice.value = max;
+  if (activeBand === 'all') {
+    search.value = ''; category.value = ''; merchant.value = '';
+    minPrice.value = ''; maxPrice.value = ''; sortOrder.value = '';
+  }
   updatePriceButtons();
-  if (manifest) reset();
-});
-resetButton.addEventListener('click', () => {
-  search.value = ''; category.value = ''; merchant.value = ''; minPrice.value = ''; maxPrice.value = ''; sortOrder.value = '';
-  activeBand = 'all'; updatePriceButtons();
   if (manifest) reset();
 });
 for (const input of [search, minPrice, maxPrice]) input.addEventListener('input', () => {
   clearTimeout(timer);
-  if (input === minPrice || input === maxPrice) {
-    activeBand = 'custom';
-    for (const button of priceButtons) if (button !== discountOnly) button.setAttribute('aria-pressed', 'false');
-  }
   if (manifest) timer = setTimeout(reset, 200);
 });
 start();

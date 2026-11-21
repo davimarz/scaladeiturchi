@@ -21,14 +21,15 @@ p{margin:0}
 summary{cursor:pointer;font-weight:800;min-height:24px}
 .promotion-sort-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding-top:10px}
 label{display:grid;gap:5px;color:var(--ink);font-size:12px;font-weight:700;min-width:0}
-.promotion-search-label,.sort-label{grid-column:1/-1}
+.promotion-search-row,.sort-label{grid-column:1/-1}
+.promotion-search-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(92px,26%);gap:10px;align-items:end}
+.promotion-search-row button{min-height:44px;background:var(--ink);color:var(--paper)}
 input,select,button{font:inherit;min-width:0;border-radius:0}
 input,select{width:100%;min-height:44px;background:var(--paper);color:var(--ink);border:2px solid var(--ink);padding:8px;font-size:16px;caret-color:var(--ink);-webkit-text-fill-color:currentColor}
 input::placeholder{color:var(--muted);opacity:1}
 #cerca{min-height:48px;padding:10px 12px}
 select option{background:var(--paper);color:var(--ink)}
 button,.torna-inizio{min-height:44px;padding:7px 12px;border:1px solid var(--ink);background:var(--paper);color:var(--ink);font-weight:700;cursor:pointer;touch-action:manipulation}
-.promotion-filters{margin-bottom:10px}
 .price-slider-labels{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .price-slider-track{position:relative;height:44px;--price-low:0%;--price-high:100%}
 .price-slider-track::before{content:"";position:absolute;inset:19px 11px;height:6px;border-radius:4px;background:linear-gradient(to right,#aaa var(--price-low),var(--ink) var(--price-low),var(--ink) var(--price-high),#aaa var(--price-high))}
@@ -37,8 +38,7 @@ button,.torna-inizio{min-height:44px;padding:7px 12px;border:1px solid var(--ink
 .price-slider-track input::-webkit-slider-thumb{appearance:none;width:22px;height:22px;border:2px solid var(--paper);border-radius:50%;background:var(--ink);pointer-events:auto;cursor:grab}
 .price-slider-track input::-moz-range-thumb{box-sizing:border-box;width:22px;height:22px;border:2px solid var(--paper);border-radius:50%;background:var(--ink);pointer-events:auto;cursor:grab}
 .price-slider output{font-weight:bold}
-.promotion-filters button{padding:4px;font-size:12px}
-.promotion-filters button[aria-pressed="true"],#altre{background:var(--ink);color:var(--paper)}
+#altre{background:var(--ink);color:var(--paper)}
 .promotion-result-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .offerte{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:stretch}
 .cisalfa-product-card{position:relative;display:flex;flex-direction:column;min-width:0;padding:8px;border:2px solid var(--ink);background:var(--paper);text-decoration:none;color:var(--ink);gap:5px}

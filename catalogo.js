@@ -9,7 +9,6 @@ const minPrice = document.getElementById('prezzo-minimo');
 const maxPrice = document.getElementById('prezzo-massimo');
 const shuffleButton = document.getElementById('mescola-sconti');
 const sortOrder = document.getElementById('ordinamento');
-const discountOnly = document.getElementById('solo-sconti');
 const collator = new Intl.Collator('it', { sensitivity: 'base', numeric: true });
 const blocks = new Map();
 const priceButtons = [...document.querySelectorAll('[data-price-band]')];
@@ -127,15 +126,15 @@ async function load() {
     return;
   }
   const lower = minPrice.value === '' ? 0 : minPrice.valueAsNumber;
-  const upper = maxPrice.value === '' ? Infinity : maxPrice.valueAsNumber;
+  const upper = maxPrice.value === maxPrice.max ? Infinity : maxPrice.valueAsNumber;
   if (lower > upper) {
     statusNode.textContent = 'Il prezzo minimo deve essere minore o uguale al prezzo massimo.';
     loading = undefined;
     return;
   }
-  const priceFilter = minPrice.value !== '' || maxPrice.value !== '';
+  const priceFilter = lower > 0 || Number.isFinite(upper);
   const order = sortOrder.value === 'discount' ? '' : sortOrder.value;
-  const discounted = order === 'shuffle' || discountOnly.getAttribute('aria-pressed') === 'true';
+  const discounted = order === 'shuffle';
   const matches = item => (!seller || item.merchant === seller) && (!selected || selected === categoryFamily(item.category)) &&
     price(item.price) >= lower && price(item.price) <= upper && (!discounted || onSale(item)) &&
     terms.every(term => normalize([item.name, item.brand, item.merchant].join(' ')).includes(term));
@@ -242,12 +241,26 @@ for (const button of priceButtons) button.addEventListener('click', () => {
   activeBand = button.dataset.priceBand;
   if (activeBand === 'all') {
     search.value = ''; category.value = ''; merchant.value = '';
-    minPrice.value = ''; maxPrice.value = ''; sortOrder.value = '';
+    minPrice.value = minPrice.min; maxPrice.value = maxPrice.max; sortOrder.value = '';
+    showPrices();
   }
   updatePriceButtons();
   if (manifest) reset();
 });
+function showPrices() {
+  for (const [input, id] of [[minPrice, 'minimo'], [maxPrice, 'massimo']]) {
+    const label = input === maxPrice && input.value === input.max ? 'Nessun limite' : euro.format(input.valueAsNumber);
+    document.getElementById('valore-' + id).textContent = label;
+    input.setAttribute('aria-valuetext', label);
+  }
+}
+showPrices();
 for (const input of [search, minPrice, maxPrice]) input.addEventListener('input', () => {
+  if (minPrice.valueAsNumber > maxPrice.valueAsNumber) {
+    if (input === minPrice) maxPrice.value = minPrice.value;
+    if (input === maxPrice) minPrice.value = maxPrice.value;
+  }
+  showPrices();
   clearTimeout(timer);
   if (manifest) timer = setTimeout(reset, 200);
 });

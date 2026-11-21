@@ -198,7 +198,9 @@ function offer(record, merchant, publisher, reject = () => null) {
   const currency = pick(record.currency, record.currency_code);
   const current = [record.sale_price, record.search_price, record.store_price, record.price, record.display_price]
     .map(value => cents(value, currency)).find(value => value > 0);
-  const image = https(pick(record.merchant_image_url, record.aw_image_url, record.image_link));
+  const image = [record.merchant_image_url, record.large_image, record.aw_image_url, record.image_link]
+    .map(value => https(pick(value)))
+    .find(candidate => candidate && !/(?:^|\/)no[-_ ]?image(?:\.[a-z0-9]+)?$/i.test(candidate.pathname));
   const url = trackingLink(record, publisher);
   if (!name || !current || !image || !url) {
     return reject(...[!name && 'titolo mancante', !current && 'prezzo EUR non valido', !image && 'immagine HTTPS mancante',
